@@ -209,6 +209,24 @@ def render_chat_page():
     
     # Check if services are initialized
     if not st.session_state.services_initialized:
+        # Debug info to help diagnose
+        from config import config as db_config
+        with st.expander("🔍 Debug Info (Click to see why auto-init didn't work)", expanded=False):
+            st.write("**Environment Check:**")
+            st.write(f"- .env file exists: {os.path.exists('.env')}")
+            st.write(f"- Current working directory: {os.getcwd()}")
+            st.write("**Config Values:**")
+            st.write(f"- DATABRICKS_HOST: {'✅ Set' if db_config.host else '❌ Missing'}")
+            st.write(f"- DATABRICKS_TOKEN: {'✅ Set' if db_config.token else '❌ Missing'}")
+            st.write(f"- GENIE_SPACE_ID: {'✅ Set' if db_config.space_id else '❌ Missing'}")
+            st.write(f"- PATIENT_CATALOG: {'✅ ' + str(db_config.patient_catalog) if db_config.patient_catalog else '❌ Missing'}")
+            st.write(f"- PATIENT_SCHEMA: {'✅ ' + str(db_config.patient_schema) if db_config.patient_schema else '❌ Missing'}")
+            st.write(f"- SQL_WAREHOUSE_ID: {'✅ Set' if db_config.warehouse_id else '❌ Missing'}")
+            st.write("**Note:** If values show as Missing, check:")
+            st.write("1. .env file exists in same directory as app.py")
+            st.write("2. .env file has all required variables")
+            st.write("3. No typos in variable names")
+        
         st.warning("⚠️ Please configure Databricks connection in the sidebar first.")
         return
     
@@ -709,13 +727,20 @@ def main():
         # Check if .env file has values
         from config import config as db_config
         
-        # Debug: Check if .env file exists
+        # Debug: Check if .env file exists and show values (for troubleshooting)
         env_file_exists = os.path.exists('.env')
         logger.info(f".env file exists: {env_file_exists}")
-        logger.info(f"Config values - host: {bool(db_config.host)}, token: {bool(db_config.token)}, space_id: {bool(db_config.space_id)}")
+        logger.info(f"Config values - host: {bool(db_config.host)}, token: {bool(db_config.token)}, space_id: {bool(db_config.space_id)}, catalog: {db_config.patient_catalog}, schema: {db_config.patient_schema}, warehouse: {bool(db_config.warehouse_id)}")
         
-        if (db_config.host and db_config.token and db_config.space_id and 
-            db_config.patient_catalog and db_config.patient_schema and db_config.warehouse_id):
+        # Check all required values
+        has_host = bool(db_config.host)
+        has_token = bool(db_config.token)
+        has_space_id = bool(db_config.space_id)
+        has_catalog = bool(db_config.patient_catalog)
+        has_schema = bool(db_config.patient_schema)
+        has_warehouse = bool(db_config.warehouse_id)
+        
+        if has_host and has_token and has_space_id and has_catalog and has_schema and has_warehouse:
             # Try to auto-initialize from .env
             try:
                 logger.info("Attempting auto-initialization from .env file")
@@ -724,13 +749,21 @@ def main():
                     logger.info("Auto-initialization successful, rerunning...")
                     st.rerun()
                 else:
-                    logger.warning("Auto-initialization returned False")
+                    logger.warning("Auto-initialization returned False - check logs for details")
             except Exception as e:
                 # If auto-init fails, user will see config page
                 logger.error(f"Auto-initialization failed: {e}", exc_info=True)
                 st.error(f"Auto-initialization failed: {str(e)}")
         else:
-            logger.info("Missing required config values, showing config page")
+            # Show which values are missing for debugging
+            missing = []
+            if not has_host: missing.append('DATABRICKS_HOST')
+            if not has_token: missing.append('DATABRICKS_TOKEN')
+            if not has_space_id: missing.append('GENIE_SPACE_ID')
+            if not has_catalog: missing.append('PATIENT_CATALOG')
+            if not has_schema: missing.append('PATIENT_SCHEMA')
+            if not has_warehouse: missing.append('SQL_WAREHOUSE_ID')
+            logger.info(f"Missing required config values: {missing}, showing config page")
     
     # Sidebar navigation
     with st.sidebar:
