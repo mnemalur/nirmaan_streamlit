@@ -27,6 +27,23 @@ logger = logging.getLogger(__name__)
 
 class GenieService:
     def __init__(self):
+        # Validate config before creating client
+        if not config.host:
+            raise ValueError("DATABRICKS_HOST is required")
+        if not config.token:
+            raise ValueError("DATABRICKS_TOKEN is required")
+        
+        # Clear any OAuth env vars that might interfere
+        import os
+        oauth_vars = ['DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET', 
+                     'DATABRICKS_OAUTH_CLIENT_ID', 'DATABRICKS_OAUTH_CLIENT_SECRET']
+        for var in oauth_vars:
+            if var in os.environ:
+                logger.warning(f"Removing OAuth env var {var} to use token auth only")
+                del os.environ[var]
+        
+        # Explicitly use only token authentication
+        # WorkspaceClient will prefer OAuth if client_id is in env, so we cleared it above
         self.w = WorkspaceClient(
             host=config.host,
             token=config.token

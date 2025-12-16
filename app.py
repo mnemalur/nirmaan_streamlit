@@ -90,6 +90,18 @@ def initialize_services():
             st.error(f"Missing required configuration: {', '.join(missing)}")
             return False
         
+        # Clear OAuth environment variables to avoid conflicts
+        # WorkspaceClient will use OAuth if client_id is set, even if token is provided
+        oauth_vars = ['DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET', 'DATABRICKS_OAUTH_CLIENT_ID', 'DATABRICKS_OAUTH_CLIENT_SECRET']
+        for var in oauth_vars:
+            if var in os.environ:
+                logger.info(f"Clearing OAuth env var: {var}")
+                del os.environ[var]
+        
+        # Verify host format (should be full URL, not just port)
+        if db_config.host and not db_config.host.startswith('http'):
+            logger.warning(f"Host format may be incorrect: {db_config.host}. Expected full URL like https://workspace.cloud.databricks.com")
+        
         # Import and initialize services
         from services.vector_search import VectorSearchService
         from services.genie_service import GenieService
