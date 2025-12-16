@@ -4,11 +4,23 @@ Handles Text-to-SQL generation using Genie API
 """
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.genie import MessageStatus
 from typing import Dict, Optional
 from config import config
 import time
 import logging
+
+from enum import Enum
+
+# MessageStatus enum - use string values for compatibility
+class MessageStatus:
+    """Message status constants for Genie API"""
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    EXECUTING_QUERY = "EXECUTING_QUERY"
+    FETCHING_METADATA = "FETCHING_METADATA"
+    QUERYING = "QUERYING"
+    RUNNING = "RUNNING"
 
 logger = logging.getLogger(__name__)
 
