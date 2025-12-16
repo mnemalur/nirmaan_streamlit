@@ -57,9 +57,19 @@ def initialize_services():
                 if value:  # Only set if value is not empty
                     os.environ[key] = value
         
-        # Import config after setting env vars (it loads from .env file automatically if not in session state)
-        # Config reads from os.environ, so session state values take precedence
+        # Import config (it loads from .env file automatically via load_dotenv())
+        # Note: config object is created at import time, so it reads from os.environ
+        # If session_state.config was set above, those values are now in os.environ
+        # But config object was already created, so we need to check os.environ directly
+        # OR reload the config module - but simpler: check os.environ directly for missing values
         from config import config as db_config
+        
+        # Re-check from os.environ in case config object was created before session_state values were set
+        # This ensures we get the latest values
+        import importlib
+        import config as config_module
+        importlib.reload(config_module)
+        db_config = config_module.config
         
         # Verify required config (check both config object and env vars)
         missing = []
