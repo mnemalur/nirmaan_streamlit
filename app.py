@@ -698,16 +698,29 @@ def main():
     if not st.session_state.services_initialized:
         # Check if .env file has values
         from config import config as db_config
+        
+        # Debug: Check if .env file exists
+        env_file_exists = os.path.exists('.env')
+        logger.info(f".env file exists: {env_file_exists}")
+        logger.info(f"Config values - host: {bool(db_config.host)}, token: {bool(db_config.token)}, space_id: {bool(db_config.space_id)}")
+        
         if (db_config.host and db_config.token and db_config.space_id and 
             db_config.patient_catalog and db_config.patient_schema and db_config.warehouse_id):
-            # Try to auto-initialize from .env (silently, no spinner on first load)
+            # Try to auto-initialize from .env
             try:
+                logger.info("Attempting auto-initialization from .env file")
                 if initialize_services():
-                    # Success - services initialized, continue to app
-                    pass
+                    # Success - services initialized, rerun to refresh UI
+                    logger.info("Auto-initialization successful, rerunning...")
+                    st.rerun()
+                else:
+                    logger.warning("Auto-initialization returned False")
             except Exception as e:
                 # If auto-init fails, user will see config page
-                logger.error(f"Auto-initialization failed: {e}")
+                logger.error(f"Auto-initialization failed: {e}", exc_info=True)
+                st.error(f"Auto-initialization failed: {str(e)}")
+        else:
+            logger.info("Missing required config values, showing config page")
     
     # Sidebar navigation
     with st.sidebar:
