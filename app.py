@@ -50,18 +50,16 @@ if 'agent_state' not in st.session_state:
 def initialize_services():
     """Initialize Databricks services with configured credentials"""
     try:
-        # Import config first (it loads from .env file automatically)
-        from config import config as db_config
-        
         # If session state has config, use it (overrides .env)
-        # Otherwise, config is already loaded from .env file
+        # Set environment variables from session state config first (if exists)
         if st.session_state.config:
-            # Set environment variables from session state config (UI override)
             for key, value in st.session_state.config.items():
                 if value:  # Only set if value is not empty
                     os.environ[key] = value
-            # Re-import config to get updated values
-            from config import config as db_config
+        
+        # Import config after setting env vars (it loads from .env file automatically if not in session state)
+        # Config reads from os.environ, so session state values take precedence
+        from config import config as db_config
         
         # Verify required config (check both config object and env vars)
         missing = []
