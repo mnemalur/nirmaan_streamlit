@@ -253,8 +253,8 @@ def render_chat_page():
             "Find knee replacement patients"
         ]
         
-        for example in example_queries:
-            if st.button(example, key=f"example_{example}", use_container_width=True):
+        for idx, example in enumerate(example_queries):
+            if st.button(example, key=f"new_cohort_example_{idx}", use_container_width=True):
                 st.session_state.user_query = example
                 st.rerun()
         
@@ -268,13 +268,8 @@ def render_chat_page():
             "Tell me about outcomes"
         ]
         
-        for example in follow_up_examples:
-            if st.button(example, key=f"followup_{example}", use_container_width=True):
-                st.session_state.user_query = example
-                st.rerun()
-        
-        for example in example_queries:
-            if st.button(example, key=f"example_{example}", use_container_width=True):
+        for idx, example in enumerate(follow_up_examples):
+            if st.button(example, key=f"followup_example_{idx}", use_container_width=True):
                 st.session_state.user_query = example
                 st.rerun()
         
