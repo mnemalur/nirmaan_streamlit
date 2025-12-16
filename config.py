@@ -26,7 +26,7 @@ class DatabricksConfig:
     # Vector Search
     vector_catalog: str = os.getenv("VECTOR_CATALOG") or os.getenv("PATIENT_CATALOG")
     vector_schema: str = os.getenv("VECTOR_SCHEMA")
-    vector_function: str = "standard_code_lookup"
+    vector_function: str = os.getenv("VECTOR_FUNCTION", "standard_code_lookup")  # Default fallback
     
     # SQL Warehouse
     warehouse_id: str = os.getenv("SQL_WAREHOUSE_ID")

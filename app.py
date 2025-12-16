@@ -50,18 +50,33 @@ if 'agent_state' not in st.session_state:
 def initialize_services():
     """Initialize Databricks services with configured credentials"""
     try:
-        # Set environment variables from session state config
-        for key, value in st.session_state.config.items():
-            if value:  # Only set if value is not empty
-                os.environ[key] = value
-        
-        # Import config after setting env vars
+        # Import config first (it loads from .env file automatically)
         from config import config as db_config
         
-        # Verify required config
-        required = ['DATABRICKS_HOST', 'DATABRICKS_TOKEN', 'GENIE_SPACE_ID', 
-                   'PATIENT_CATALOG', 'PATIENT_SCHEMA', 'SQL_WAREHOUSE_ID']
-        missing = [k for k in required if not os.getenv(k)]
+        # If session state has config, use it (overrides .env)
+        # Otherwise, config is already loaded from .env file
+        if st.session_state.config:
+            # Set environment variables from session state config (UI override)
+            for key, value in st.session_state.config.items():
+                if value:  # Only set if value is not empty
+                    os.environ[key] = value
+            # Re-import config to get updated values
+            from config import config as db_config
+        
+        # Verify required config (check both config object and env vars)
+        missing = []
+        if not db_config.host:
+            missing.append('DATABRICKS_HOST')
+        if not db_config.token:
+            missing.append('DATABRICKS_TOKEN')
+        if not db_config.space_id:
+            missing.append('GENIE_SPACE_ID')
+        if not db_config.patient_catalog:
+            missing.append('PATIENT_CATALOG')
+        if not db_config.patient_schema:
+            missing.append('PATIENT_SCHEMA')
+        if not db_config.warehouse_id:
+            missing.append('SQL_WAREHOUSE_ID')
         
         if missing:
             st.error(f"Missing required configuration: {', '.join(missing)}")
@@ -681,6 +696,21 @@ def generate_insights():
 
 def main():
     """Main application"""
+    # Auto-initialize from .env file if available and not already initialized
+    if not st.session_state.services_initialized:
+        # Check if .env file has values
+        from config import config as db_config
+        if (db_config.host and db_config.token and db_config.space_id and 
+            db_config.patient_catalog and db_config.patient_schema and db_config.warehouse_id):
+            # Try to auto-initialize from .env (silently, no spinner on first load)
+            try:
+                if initialize_services():
+                    # Success - services initialized, continue to app
+                    pass
+            except Exception as e:
+                # If auto-init fails, user will see config page
+                logger.error(f"Auto-initialization failed: {e}")
+    
     # Sidebar navigation
     with st.sidebar:
         st.title("🏥 Clinical Cohort Assistant")

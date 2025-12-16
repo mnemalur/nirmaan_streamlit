@@ -42,7 +42,8 @@ env/
 # Environment variables
 .env
 .env.local
-*.env
+# Allow .env.example template
+!.env.example
 
 # Streamlit
 .streamlit/
