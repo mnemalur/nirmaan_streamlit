@@ -45,6 +45,8 @@ if 'config' not in st.session_state:
     st.session_state.config = {}
 if 'agent_state' not in st.session_state:
     st.session_state.agent_state = {}
+if 'criteria_analysis' not in st.session_state:
+    st.session_state.criteria_analysis = None
 
 
 def initialize_services():
@@ -295,6 +297,52 @@ def render_chat_page():
         
         st.warning("⚠️ Please configure Databricks connection in the sidebar first.")
         return
+
+    # Criteria understanding (Milestone 1) – lightweight analysis before the full agent flow
+    with st.expander("🧩 Understand my clinical criteria (Milestone 1)", expanded=True):
+        with st.form("criteria_analysis_form"):
+            criteria_text = st.text_area(
+                "Describe your clinical criteria in natural language",
+                value="",
+                placeholder="e.g., Adults 50–80 with at least two encounters for heart failure in the last 3 years, currently on beta-blockers.",
+                height=120,
+            )
+            analyze_submitted = st.form_submit_button("Analyze criteria", use_container_width=True)
+
+        if analyze_submitted and criteria_text:
+            if not hasattr(st.session_state, "intent_service") or st.session_state.intent_service is None:
+                st.error("Intent service is not initialized. Please check configuration.")
+            else:
+                with st.spinner("Analyzing criteria..."):
+                    analysis = st.session_state.intent_service.analyze_criteria(criteria_text)
+                    st.session_state.criteria_analysis = analysis
+
+        analysis = st.session_state.get("criteria_analysis")
+        if analysis:
+            st.subheader("How I understand your criteria")
+            st.write(analysis.get("summary", ""))
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Conditions**")
+                st.write(", ".join(analysis.get("conditions", [])) or "—")
+                st.markdown("**Drugs**")
+                st.write(", ".join(analysis.get("drugs", [])) or "—")
+                st.markdown("**Procedures**")
+                st.write(", ".join(analysis.get("procedures", [])) or "—")
+            with col2:
+                st.markdown("**Demographics**")
+                st.write(", ".join(analysis.get("demographics", [])) or "—")
+                st.markdown("**Timeframe**")
+                st.write(analysis.get("timeframe") or "—")
+
+            ambiguities = analysis.get("ambiguities", [])
+            st.markdown("**Ambiguities / things to clarify**")
+            if ambiguities:
+                for a in ambiguities:
+                    st.markdown(f"- {a}")
+            else:
+                st.write("None detected; criteria looks fairly specific.")
     
     # Sidebar with example queries
     with st.sidebar:
