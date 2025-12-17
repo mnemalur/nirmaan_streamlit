@@ -262,8 +262,29 @@ def search_codes_for_criteria(criteria_text: str):
     analysis = st.session_state.get("criteria_analysis") or {}
     conditions = analysis.get("conditions") or []
 
+    codes = []
+
     if conditions:
-        search_text = "; ".join(conditions)
+        # If there are multiple conditions (e.g., diabetes AND cancer), call the
+        # vector lookup separately for each condition phrase so that each one
+        # gets a clean, precise search term.
+        search_terms = [c.strip() for c in conditions if c and c.strip()]
+        st.session_state.code_search_text = "; ".join(search_terms)
+
+        for term in search_terms:
+            try:
+                with st.spinner(f"Looking up codes for: {term}"):
+                    term_codes = st.session_state.vector_service.search_codes(term, limit=10)
+            except Exception as e:
+                logger.error(f"Code search error for '{term}': {e}", exc_info=True)
+                continue
+
+            for c in term_codes:
+                # Tag each code with the condition phrase it came from so we
+                # can show this context in the UI.
+                c = dict(c)
+                c["condition"] = term
+                codes.append(c)
     else:
         # Fallback: use the intent service (if available) to extract diagnosis phrases
         try:
@@ -276,16 +297,24 @@ def search_codes_for_criteria(criteria_text: str):
             logger.warning(f"Intent extraction before code search failed, using raw criteria: {e}")
             search_text = criteria_text
 
-    st.session_state.code_search_text = search_text
+        st.session_state.code_search_text = search_text
 
-    try:
-        with st.spinner("Looking up matching diagnosis and drug codes..."):
-            codes = st.session_state.vector_service.search_codes(search_text, limit=10)
-    except Exception as e:
-        msg = f"Error searching for codes: {e}"
-        st.session_state.code_search_error = msg
+        try:
+            with st.spinner("Looking up matching diagnosis and drug codes..."):
+                codes = st.session_state.vector_service.search_codes(search_text, limit=10)
+        except Exception as e:
+            msg = f"Error searching for codes: {e}"
+            st.session_state.code_search_error = msg
+            st.session_state.codes = []
+            logger.error(msg, exc_info=True)
+            return
+
+    if not codes:
+        st.session_state.code_search_error = (
+            "I couldn't find any standard codes from this description. "
+            "You may want to specify a more precise condition or drug name in your criteria."
+        )
         st.session_state.codes = []
-        logger.error(msg, exc_info=True)
         return
 
     st.session_state.code_search_error = ""
@@ -518,7 +547,7 @@ def render_chat_page():
         )
         st.subheader("📋 Relevant codes I found")
         code_df = pd.DataFrame(codes)
-        display_cols = ['code', 'description', 'vocabulary']
+        display_cols = ['condition', 'code', 'description', 'vocabulary']
         available_cols = [col for col in display_cols if col in code_df.columns]
         st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
 
@@ -534,7 +563,11 @@ def render_chat_page():
         if choice == "Let me choose specific codes":
             # Build nice labels for the multiselect
             label_to_code = {
-                f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
+                (
+                    f"[{c.get('condition')}] {c.get('code')} – {c.get('description')} ({c.get('vocabulary')})"
+                    if c.get("condition")
+                    else f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})"
+                ): c
                 for c in codes
             }
             selected_labels = st.multiselect(
