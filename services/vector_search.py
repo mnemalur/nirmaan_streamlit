@@ -1,12 +1,16 @@
 """
 Vector Search Service
-Integrates with Databricks UC Function: standard_code_lookup
+Integrates with Databricks UC table function: standard_code_lookup
+
+We call the function through the SQL Warehouse using databricks-sql-connector,
+so we don't depend on a specific `functions.execute` method on the Python SDK.
 """
 
-from databricks.sdk import WorkspaceClient
 from typing import List, Dict
-from config import config
 import logging
+
+from databricks.sql import connect
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -18,30 +22,22 @@ class VectorSearchService:
             raise ValueError("DATABRICKS_HOST is required")
         if not config.token:
             raise ValueError("DATABRICKS_TOKEN is required")
-        
-        # Clear any OAuth env vars that might interfere
-        import os
-        oauth_vars = ['DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET', 
-                     'DATABRICKS_OAUTH_CLIENT_ID', 'DATABRICKS_OAUTH_CLIENT_SECRET']
-        for var in oauth_vars:
-            if var in os.environ:
-                logger.warning(f"Removing OAuth env var {var} to use token auth only")
-                del os.environ[var]
-        
-        # Explicitly use only token authentication
-        self.w = WorkspaceClient(
-            host=config.host,
-            token=config.token
-        )
-    
+        if not config.warehouse_id:
+            raise ValueError("SQL_WAREHOUSE_ID is required for vector search")
+
+        self.server_hostname = config.host.replace("https://", "").replace("http://", "")
+        self.http_path = f"/sql/1.0/warehouses/{config.warehouse_id}"
+        self.function_fqn = config.vector_function_fqn
+
     def search_codes(self, clinical_text: str, limit: int = 10) -> List[Dict]:
         """
-        Call UC Function: standard_code_lookup
-        
+        Call UC table function: standard_code_lookup via SQL Warehouse.
+
         Args:
-            clinical_text: Natural language description of condition
-            limit: Maximum number of codes to return
-        
+            clinical_text: Natural language description of condition.
+            limit: Unused here; the vector function itself is expected to enforce
+                   any row limit internally.
+
         Returns:
             List of dicts with: code, description, vocabulary, confidence
             [
@@ -54,35 +50,40 @@ class VectorSearchService:
                 ...
             ]
         """
-        
+
         logger.info(f"Vector search for: {clinical_text}")
-        
-        # Call UC Function
-        # NOTE: Your UC function takes only a single parameter (query_text)
-        # and handles any limiting logic internally, so we only pass that one.
-        result = self.w.functions.execute(
-            name=config.vector_function_fqn,
-            parameters=[
-                {"name": "query_text", "value": clinical_text},
-            ]
-        )
-        
-        # Parse results
-        codes = []
-        if result.value:
-            # Assuming function returns JSON array
-            import json
-            results = json.loads(result.value) if isinstance(result.value, str) else result.value
-            
-            for item in results:
-                codes.append({
-                    'code': item['source_code'],
-                    'description': item['concept_name'],
-                    'vocabulary': item['vocabulary_id'],
-                    'confidence': item.get('similarity_score', 0) * 100,  # Convert to percentage
-                    'reason': f"Match based on semantic similarity to '{clinical_text}'"
-                })
-        
+
+        # Basic escaping for single quotes in the input to keep the SQL valid.
+        escaped = clinical_text.replace("'", "''") if clinical_text else ""
+
+        # Treat the UC function as a table function and invoke it from SQL.
+        sql = f"SELECT * FROM {self.function_fqn}(query_text => '{escaped}')"
+        logger.info(f"Executing vector search SQL via warehouse: {sql}")
+
+        codes: List[Dict] = []
+
+        with connect(
+            server_hostname=self.server_hostname,
+            http_path=self.http_path,
+            access_token=config.token,
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(sql)
+
+                cols = [d[0] for d in cursor.description]
+                for row in cursor.fetchall():
+                    rec = dict(zip(cols, row))
+                    # Map expected columns from the function result
+                    codes.append(
+                        {
+                            "code": rec.get("source_code"),
+                            "description": rec.get("concept_name"),
+                            "vocabulary": rec.get("vocabulary_id"),
+                            "confidence": (rec.get("similarity_score") or 0) * 100,
+                            "reason": f"Match based on semantic similarity to '{clinical_text}'",
+                        }
+                    )
+
         logger.info(f"Vector search returned {len(codes)} codes")
         return codes
 
@@ -91,7 +92,7 @@ class VectorSearchService:
 if __name__ == "__main__":
     vector_service = VectorSearchService()
     codes = vector_service.search_codes("acute myocardial infarction LAD")
-    
+
     print(f"Found {len(codes)} codes:")
     for code in codes:
         print(f"  {code['code']} - {code['description']} ({code['confidence']:.1f}%)")
