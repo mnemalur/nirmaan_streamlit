@@ -136,10 +136,14 @@ class CohortAgent:
                     {c.get("vocabulary") for c in codes if c.get("vocabulary")}
                 )
                 state["vocabularies"] = vocabularies
-            
-            if not codes:
-                state["error"] = "No relevant codes found. Please try rephrasing your query."
-                state["current_step"] = "error"
+            else:
+                # No codes from vector search – don't hard fail. We'll fall back
+                # to using only the original user query when building the Genie
+                # request so the LLM still has a chance to interpret intent.
+                logger.warning(
+                    "Vector search returned no codes; will fall back to Genie with "
+                    "original query only."
+                )
             
             return state
         except Exception as e:

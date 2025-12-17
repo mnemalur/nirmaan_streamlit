@@ -59,11 +59,12 @@ class VectorSearchService:
         
         try:
             # Call UC Function
+            # NOTE: Your UC function takes only a single parameter (query_text)
+            # and handles any limiting logic internally, so we only pass that one.
             result = self.w.functions.execute(
                 name=config.vector_function_fqn,
                 parameters=[
                     {"name": "query_text", "value": clinical_text},
-                    {"name": "limit", "value": str(limit)}
                 ]
             )
             
