@@ -327,34 +327,53 @@ def render_chat_page():
             st.subheader("How I understand your criteria")
             st.write(analysis.get("summary", ""))
 
+            # Only show concept groups that actually have content, so it doesn't
+            # feel like you're being told something is “missing” when you never
+            # specified it.
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("**Conditions**")
-                st.write(", ".join(analysis.get("conditions", [])) or "—")
-                st.markdown("**Drugs**")
-                st.write(", ".join(analysis.get("drugs", [])) or "—")
-                st.markdown("**Procedures**")
-                st.write(", ".join(analysis.get("procedures", [])) or "—")
+                conditions = analysis.get("conditions") or []
+                if conditions:
+                    st.markdown("**Conditions**")
+                    st.write(", ".join(conditions))
+
+                drugs = analysis.get("drugs") or []
+                if drugs:
+                    st.markdown("**Drugs**")
+                    st.write(", ".join(drugs))
+
+                procedures = analysis.get("procedures") or []
+                if procedures:
+                    st.markdown("**Procedures**")
+                    st.write(", ".join(procedures))
+
             with col2:
-                st.markdown("**Demographics**")
-                st.write(", ".join(analysis.get("demographics", [])) or "—")
-                st.markdown("**Timeframe**")
-                st.write(analysis.get("timeframe") or "—")
+                demographics = analysis.get("demographics") or []
+                if demographics:
+                    st.markdown("**Demographics**")
+                    st.write(", ".join(demographics))
+
+                timeframe = analysis.get("timeframe") or ""
+                if timeframe:
+                    st.markdown("**Timeframe**")
+                    st.write(timeframe)
 
             ambiguities = analysis.get("ambiguities", [])
             st.markdown("**Ambiguities / things to clarify**")
             if ambiguities:
                 st.info(
                     f"I see {len(ambiguities)} point(s) that could affect how I match this "
-                    "to patients. You can refine the criteria now, or continue and I’ll still "
-                    "try to find the best matching codes based on what you wrote."
+                    "to patients. You can refine the criteria now, or, in the chat below, "
+                    "add clarifications or just type **“continue with this criteria”** and "
+                    "I’ll still try to find the best matching codes based on what you wrote."
                 )
                 for a in ambiguities:
                     st.markdown(f"- {a}")
             else:
                 st.success(
                     "I don’t see major ambiguities. This looks specific enough to start "
-                    "mapping to standard codes in the next step."
+                    "mapping to standard codes in the next step. In the chat below you can "
+                    "either refine this further or just say **“continue with this criteria”**."
                 )
     
     # Sidebar with example queries
