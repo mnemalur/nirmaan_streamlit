@@ -361,6 +361,12 @@ def process_query(query: str):
                     # Display codes if available
                     codes = result_state.get("codes", [])
                     if codes:
+                        # Trust-building explanation for the user
+                        st.markdown(
+                            "I've interpreted your request and looked up relevant standard codes "
+                            "across the available vocabularies. Review these codes to see how I'm "
+                            "making your request more precise before sending it on to Genie."
+                        )
                         st.subheader("📋 Relevant Codes Found")
                         code_df = pd.DataFrame(codes)
                         display_cols = ['code', 'description', 'vocabulary', 'confidence']

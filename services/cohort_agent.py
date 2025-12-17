@@ -152,35 +152,46 @@ class CohortAgent:
         """Generate SQL query using Genie"""
         try:
             codes = state.get("codes", [])
+            # If no codes came back from vector search, fall back to using only
+            # the original user query to build a Genie request instead of
+            # immediately failing. This lets the LLM still try to interpret
+            # the intent even when the vector function returns nothing.
             if not codes:
-                state["error"] = "No codes available for SQL generation"
-                state["current_step"] = "error"
-                return state
-            
-            # Extract criteria from query (simplified - could be enhanced with NLP)
-            # Include both the original user query and full code details so Genie
-            # gets a precise, disambiguated description of the clinical intent.
-            top_codes = codes[:5]
-            criteria = {
-                # Just the raw codes (used for WHERE clause)
-                'codes': [c['code'] for c in top_codes],
-                # Original natural language query from the user
-                'original_query': state.get("user_query", ""),
-                # Full code details (code + description + vocabulary) from vector search
-                'code_details': [
-                    {
-                        'code': c.get('code'),
-                        'description': c.get('description'),
-                        'vocabulary': c.get('vocabulary')
-                    }
-                    for c in top_codes
-                ],
-                # All vocabularies / coding systems involved (if any)
-                'vocabularies': state.get("vocabularies", []),
-                'timeframe': '30 days',  # Could extract from query later
-                'age': None,  # Could extract from query later
-                'patient_table_prefix': config.patient_table_prefix
-            }
+                logger.warning("No codes found; falling back to Genie with original query only")
+                criteria = {
+                    'codes': [],
+                    'original_query': state.get("user_query", ""),
+                    'code_details': [],
+                    'vocabularies': [],
+                    'timeframe': '30 days',
+                    'age': None,
+                    'patient_table_prefix': config.patient_table_prefix,
+                }
+            else:
+                # Extract criteria from query (simplified - could be enhanced with NLP)
+                # Include both the original user query and full code details so Genie
+                # gets a precise, disambiguated description of the clinical intent.
+                top_codes = codes[:5]
+                criteria = {
+                    # Just the raw codes (used for WHERE clause)
+                    'codes': [c['code'] for c in top_codes],
+                    # Original natural language query from the user
+                    'original_query': state.get("user_query", ""),
+                    # Full code details (code + description + vocabulary) from vector search
+                    'code_details': [
+                        {
+                            'code': c.get('code'),
+                            'description': c.get('description'),
+                            'vocabulary': c.get('vocabulary')
+                        }
+                        for c in top_codes
+                    ],
+                    # All vocabularies / coding systems involved (if any)
+                    'vocabularies': state.get("vocabularies", []),
+                    'timeframe': '30 days',  # Could extract from query later
+                    'age': None,  # Could extract from query later
+                    'patient_table_prefix': config.patient_table_prefix
+                }
             
             result = self.genie_service.create_cohort_query(criteria)
 
