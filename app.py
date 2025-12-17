@@ -542,46 +542,72 @@ def render_chat_page():
 
         st.markdown(
             "I've taken your criteria and, based on the key clinical phrases, "
-            "looked up relevant standard codes across the available vocabularies. "
-            "Review them below and decide whether to use all of them or only a subset."
+            "looked up relevant standard codes across the available vocabularies."
         )
-        st.subheader("📋 Relevant codes I found")
-        code_df = pd.DataFrame(codes)
-        display_cols = ['condition', 'code', 'description', 'vocabulary']
-        available_cols = [col for col in display_cols if col in code_df.columns]
-        st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+
+        # Group codes by condition phrase so multi-condition queries feel organized.
+        grouped: dict[str, list[dict]] = {}
+        for c in codes:
+            cond = c.get("condition") or "Unspecified condition"
+            grouped.setdefault(cond, []).append(c)
+
+        st.markdown("**Conditions covered and codes found:**")
+        for cond, cond_codes in grouped.items():
+            st.markdown(f"- **{cond}**: {len(cond_codes)} code(s)")
 
         st.markdown("### How should I use these codes?")
-        choice = st.radio(
+        overall_choice = st.radio(
             "",
-            ["Use all suggested codes", "Let me choose specific codes"],
+            ["Use all suggested codes", "Let me choose per condition"],
             index=0,
             horizontal=True,
         )
 
-        selected_codes = codes
-        if choice == "Let me choose specific codes":
-            # Build nice labels for the multiselect
-            label_to_code = {
-                (
-                    f"[{c.get('condition')}] {c.get('code')} – {c.get('description')} ({c.get('vocabulary')})"
-                    if c.get("condition")
-                    else f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})"
-                ): c
-                for c in codes
-            }
-            selected_labels = st.multiselect(
-                "Choose the codes you want me to use when I go look for patients:",
-                options=list(label_to_code.keys()),
-            )
-            selected_codes = [label_to_code[label] for label in selected_labels]
+        selected_codes: list[dict] = []
+
+        if overall_choice == "Use all suggested codes":
+            # Simple path: take everything from all conditions.
+            for cond_codes in grouped.values():
+                selected_codes.extend(cond_codes)
+        else:
+            # Let the user expand per-condition sections to see and optionally trim codes.
+            for idx, (cond, cond_codes) in enumerate(grouped.items()):
+                with st.expander(f"Codes for: {cond} ({len(cond_codes)} code(s))", expanded=(len(grouped) == 1)):
+                    code_df = pd.DataFrame(cond_codes)
+                    display_cols = ['code', 'description', 'vocabulary']
+                    available_cols = [col for col in display_cols if col in code_df.columns]
+                    st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+
+                    choice = st.radio(
+                        f"How should I use codes for {cond}?",
+                        ["Use all codes for this condition", "Let me choose specific codes"],
+                        index=0,
+                        horizontal=True,
+                        key=f"codes_choice_{idx}",
+                    )
+
+                    if choice == "Use all codes for this condition":
+                        selected_codes.extend(cond_codes)
+                    else:
+                        label_to_code = {
+                            f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
+                            for c in cond_codes
+                        }
+                        selected_labels = st.multiselect(
+                            f"Choose codes to keep for {cond}:",
+                            options=list(label_to_code.keys()),
+                            key=f"codes_select_{idx}",
+                        )
+                        for label in selected_labels:
+                            selected_codes.append(label_to_code[label])
 
         st.session_state.selected_codes = selected_codes
 
         if selected_codes:
             st.success(
-                f"I'll carry forward {len(selected_codes)} code(s) when we move on to "
-                "build the cohort definition and, in the next milestone, search for patients."
+                f"I'll carry forward {len(selected_codes)} code(s) across "
+                f"{len(grouped)} condition(s) when we move on to build the cohort definition "
+                "and, in the next milestone, search for patients."
             )
 
             if st.button("Add these codes and refine criteria", use_container_width=True):
