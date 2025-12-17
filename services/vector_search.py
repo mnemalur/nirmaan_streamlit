@@ -57,40 +57,34 @@ class VectorSearchService:
         
         logger.info(f"Vector search for: {clinical_text}")
         
-        try:
-            # Call UC Function
-            # NOTE: Your UC function takes only a single parameter (query_text)
-            # and handles any limiting logic internally, so we only pass that one.
-            result = self.w.functions.execute(
-                name=config.vector_function_fqn,
-                parameters=[
-                    {"name": "query_text", "value": clinical_text},
-                ]
-            )
+        # Call UC Function
+        # NOTE: Your UC function takes only a single parameter (query_text)
+        # and handles any limiting logic internally, so we only pass that one.
+        result = self.w.functions.execute(
+            name=config.vector_function_fqn,
+            parameters=[
+                {"name": "query_text", "value": clinical_text},
+            ]
+        )
+        
+        # Parse results
+        codes = []
+        if result.value:
+            # Assuming function returns JSON array
+            import json
+            results = json.loads(result.value) if isinstance(result.value, str) else result.value
             
-            # Parse results
-            codes = []
-            if result.value:
-                # Assuming function returns JSON array
-                import json
-                results = json.loads(result.value) if isinstance(result.value, str) else result.value
-                
-                for item in results:
-                    codes.append({
-                        'code': item['source_code'],
-                        'description': item['concept_name'],
-                        'vocabulary': item['vocabulary_id'],
-                        'confidence': item.get('similarity_score', 0) * 100,  # Convert to percentage
-                        'reason': f"Match based on semantic similarity to '{clinical_text}'"
-                    })
-            
-            logger.info(f"Vector search returned {len(codes)} codes")
-            return codes
-            
-        except Exception as e:
-            logger.error(f"Vector search failed: {str(e)}")
-            # Return empty list on error rather than failing
-            return []
+            for item in results:
+                codes.append({
+                    'code': item['source_code'],
+                    'description': item['concept_name'],
+                    'vocabulary': item['vocabulary_id'],
+                    'confidence': item.get('similarity_score', 0) * 100,  # Convert to percentage
+                    'reason': f"Match based on semantic similarity to '{clinical_text}'"
+                })
+        
+        logger.info(f"Vector search returned {len(codes)} codes")
+        return codes
 
 
 # Example usage

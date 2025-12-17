@@ -199,6 +199,9 @@ def search_codes_for_criteria(criteria_text: str):
         logger.warning(f"Intent extraction before code search failed, using raw criteria: {e}")
         search_text = criteria_text
 
+    st.markdown("**Phrases I used to search for codes**")
+    st.write(search_text)
+
     try:
         with st.spinner("Looking up matching diagnosis and drug codes..."):
             codes = st.session_state.vector_service.search_codes(search_text, limit=10)
