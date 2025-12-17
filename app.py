@@ -57,6 +57,10 @@ if 'refined_criteria' not in st.session_state:
     st.session_state.refined_criteria = None
 if 'refined_criteria_text' not in st.session_state:
     st.session_state.refined_criteria_text = ""
+if 'code_search_text' not in st.session_state:
+    st.session_state.code_search_text = ""
+if 'code_search_error' not in st.session_state:
+    st.session_state.code_search_error = ""
 if 'selected_codes' not in st.session_state:
     st.session_state.selected_codes = []
 
@@ -239,13 +243,19 @@ def refine_criteria_with_codes():
 
 
 def search_codes_for_criteria(criteria_text: str):
-    """Use vector search to find standard codes for the given criteria text."""
+    """Use vector search to find standard codes for the given criteria text.
+
+    This only updates session state; the UI for reviewing and selecting codes
+    is rendered in render_chat_page so that buttons work correctly across reruns.
+    """
     if not criteria_text:
-        st.error("No criteria available to search for codes.")
+        st.session_state.code_search_error = "No criteria available to search for codes."
+        st.session_state.codes = []
         return
 
     if not hasattr(st.session_state, "vector_service") or st.session_state.vector_service is None:
-        st.error("Vector search service is not initialized. Please check configuration.")
+        st.session_state.code_search_error = "Vector search service is not initialized. Please check configuration."
+        st.session_state.codes = []
         return
 
     # Prefer the structured "conditions" extracted during criteria analysis.
@@ -266,80 +276,20 @@ def search_codes_for_criteria(criteria_text: str):
             logger.warning(f"Intent extraction before code search failed, using raw criteria: {e}")
             search_text = criteria_text
 
-    st.markdown("**Text I used to search for codes**")
-    st.write(search_text)
+    st.session_state.code_search_text = search_text
 
     try:
         with st.spinner("Looking up matching diagnosis and drug codes..."):
             codes = st.session_state.vector_service.search_codes(search_text, limit=10)
     except Exception as e:
-        st.error(f"Error searching for codes: {e}")
-        logger.error(f"Code search error: {e}", exc_info=True)
+        msg = f"Error searching for codes: {e}"
+        st.session_state.code_search_error = msg
+        st.session_state.codes = []
+        logger.error(msg, exc_info=True)
         return
 
-    if not codes:
-        st.warning(
-            "I couldn't find any standard codes from this description. "
-            "You may want to specify a more precise condition or drug name in your criteria."
-        )
-        return
-
+    st.session_state.code_search_error = ""
     st.session_state.codes = codes
-
-    st.markdown(
-        "I've taken your criteria and, based on the key clinical phrases, "
-        "looked up relevant standard codes across the available vocabularies. "
-        "Review them below and decide whether to use all of them or only a subset."
-    )
-    st.subheader("📋 Relevant codes I found")
-    code_df = pd.DataFrame(codes)
-    # For now we hide the numeric confidence from the UI because your function
-    # already filters to the best matches, and we don't want to mislead users
-    # with artificial scores. We keep it internally in case we need it later.
-    display_cols = ['code', 'description', 'vocabulary']
-    available_cols = [col for col in display_cols if col in code_df.columns]
-    st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
-
-    # Simple, conversational selection experience:
-    st.markdown("### How should I use these codes?")
-    choice = st.radio(
-        "",
-        ["Use all suggested codes", "Let me choose specific codes"],
-        index=0,
-        horizontal=True,
-    )
-
-    selected_codes = codes
-    if choice == "Let me choose specific codes":
-        # Build nice labels for the multiselect
-        label_to_code = {
-            f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
-            for c in codes
-        }
-        selected_labels = st.multiselect(
-            "Choose the codes you want me to use when I go look for patients:",
-            options=list(label_to_code.keys()),
-        )
-        selected_codes = [label_to_code[label] for label in selected_labels]
-
-    st.session_state.selected_codes = selected_codes
-
-    if selected_codes:
-        st.success(
-            f"I'll carry forward {len(selected_codes)} code(s) when we move on to "
-            "build the cohort definition and, in the next milestone, search for patients."
-        )
-
-        if st.button("Add these codes and refine criteria", use_container_width=True):
-            refined_text = refine_criteria_with_codes()
-            if refined_text:
-                st.subheader("Refined criteria I'll use going forward")
-                st.write(refined_text)
-    else:
-        st.warning(
-            "You haven't selected any codes yet. I won't be able to build a cohort "
-            "until there is at least one code to represent the condition."
-        )
 
 
 def render_config_page():
@@ -549,10 +499,68 @@ def render_chat_page():
             if st.button("Continue with this criteria and search for codes", use_container_width=True):
                 criteria_text_for_codes = st.session_state.get("criteria_text") or ""
                 search_codes_for_criteria(criteria_text_for_codes)
-    
-    # For Milestone 1 we keep the experience focused on criteria understanding.
-    # The full multi-turn chat and example buttons will be reintroduced in later
-    # milestones when the end-to-end agent flow (codes + SQL + insights) is ready.
+
+    # If we have attempted a code search, show what we did and let the user choose
+    # how to use the codes.
+    if st.session_state.code_search_text:
+        st.markdown("**Text I used to search for codes**")
+        st.write(st.session_state.code_search_text)
+
+    if st.session_state.code_search_error:
+        st.error(st.session_state.code_search_error)
+    elif st.session_state.codes:
+        codes = st.session_state.codes
+
+        st.markdown(
+            "I've taken your criteria and, based on the key clinical phrases, "
+            "looked up relevant standard codes across the available vocabularies. "
+            "Review them below and decide whether to use all of them or only a subset."
+        )
+        st.subheader("📋 Relevant codes I found")
+        code_df = pd.DataFrame(codes)
+        display_cols = ['code', 'description', 'vocabulary']
+        available_cols = [col for col in display_cols if col in code_df.columns]
+        st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+
+        st.markdown("### How should I use these codes?")
+        choice = st.radio(
+            "",
+            ["Use all suggested codes", "Let me choose specific codes"],
+            index=0,
+            horizontal=True,
+        )
+
+        selected_codes = codes
+        if choice == "Let me choose specific codes":
+            # Build nice labels for the multiselect
+            label_to_code = {
+                f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
+                for c in codes
+            }
+            selected_labels = st.multiselect(
+                "Choose the codes you want me to use when I go look for patients:",
+                options=list(label_to_code.keys()),
+            )
+            selected_codes = [label_to_code[label] for label in selected_labels]
+
+        st.session_state.selected_codes = selected_codes
+
+        if selected_codes:
+            st.success(
+                f"I'll carry forward {len(selected_codes)} code(s) when we move on to "
+                "build the cohort definition and, in the next milestone, search for patients."
+            )
+
+            if st.button("Add these codes and refine criteria", use_container_width=True):
+                refined_text = refine_criteria_with_codes()
+                if refined_text:
+                    st.subheader("Refined criteria I'll use going forward")
+                    st.write(refined_text)
+        else:
+            st.warning(
+                "You haven't selected any codes yet. I won't be able to build a cohort "
+                "until there is at least one code to represent the condition."
+            )
 
 
 def process_query(query: str):
