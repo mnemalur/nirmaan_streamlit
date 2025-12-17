@@ -106,17 +106,20 @@ def initialize_services():
         from services.vector_search import VectorSearchService
         from services.genie_service import GenieService
         from services.cohort_manager import CohortManager
+        from services.intent_service import IntentService
         from services.cohort_agent import CohortAgent
         
         st.session_state.vector_service = VectorSearchService()
         st.session_state.genie_service = GenieService()
         st.session_state.cohort_manager = CohortManager()
+        st.session_state.intent_service = IntentService()
         
-        # Initialize LangGraph agent
+        # Initialize LangGraph agent (LLM + vector search + Genie + cohort manager)
         st.session_state.cohort_agent = CohortAgent(
             st.session_state.vector_service,
             st.session_state.genie_service,
-            st.session_state.cohort_manager
+            st.session_state.cohort_manager,
+            st.session_state.intent_service
         )
         
         st.session_state.services_initialized = True

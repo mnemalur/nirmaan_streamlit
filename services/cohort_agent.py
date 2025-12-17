@@ -17,6 +17,7 @@ class AgentState(TypedDict, total=False):
     """State managed by the LangGraph agent"""
     messages: Annotated[list, add_messages]
     user_query: str
+    diagnosis_phrases: list  # phrases extracted by LLM for diagnosis intent
     codes: list
     vocabularies: list  # list of vocabulary_ids / coding systems represented in codes
     genie_prompt: str   # enriched, code-aware request that would be sent to Genie
@@ -33,10 +34,11 @@ class AgentState(TypedDict, total=False):
 class CohortAgent:
     """Conversational agent for cohort building using LangGraph"""
     
-    def __init__(self, vector_service, genie_service, cohort_manager):
+    def __init__(self, vector_service, genie_service, cohort_manager, intent_service=None):
         self.vector_service = vector_service
         self.genie_service = genie_service
         self.cohort_manager = cohort_manager
+        self.intent_service = intent_service
         self.graph = self._build_graph()
     
     def _build_graph(self) -> StateGraph:
@@ -46,6 +48,7 @@ class CohortAgent:
         
         # Add nodes
         workflow.add_node("classify_query", self._classify_query)
+        workflow.add_node("interpret_intent", self._interpret_intent)
         workflow.add_node("search_codes", self._search_codes)
         workflow.add_node("generate_sql", self._generate_sql)
         workflow.add_node("materialize_cohort", self._materialize_cohort)
@@ -60,7 +63,7 @@ class CohortAgent:
             "classify_query",
             self._route_query,
             {
-                "new_cohort": "search_codes",
+                "new_cohort": "interpret_intent",
                 "follow_up": "answer_question",
                 "insights": "answer_question",
                 "error": "handle_error"
@@ -68,9 +71,10 @@ class CohortAgent:
         )
         
         # Flow for new cohort creation
-        # For now, we stop after generating the enriched Genie request
-        # so users can review codes and the structured prompt before we
-        # actually call Genie or materialize the cohort.
+        # LLM first interprets intent, then we search codes, then build the
+        # enriched Genie request. For now, we stop after generate_sql so
+        # users can review everything before executing SQL.
+        workflow.add_edge("interpret_intent", "search_codes")
         workflow.add_edge("search_codes", "generate_sql")
         workflow.add_edge("generate_sql", END)
         # Later, when enabling full flow:
@@ -122,11 +126,35 @@ class CohortAgent:
         else:
             return "error"
     
+    def _interpret_intent(self, state: AgentState) -> AgentState:
+        """Use LLM to extract diagnosis phrases from the user query."""
+        query = state.get("user_query", "") or ""
+        if not query:
+            return state
+
+        # If an intent service is wired, use it. Otherwise, fall back to the
+        # raw query as a single phrase.
+        try:
+            if self.intent_service:
+                phrases = self.intent_service.extract_diagnosis_phrases(query)
+            else:
+                phrases = [query]
+        except Exception as e:
+            logger.warning(f"Intent extraction error, using raw query: {e}")
+            phrases = [query]
+
+        state["diagnosis_phrases"] = phrases
+        return state
+    
     def _search_codes(self, state: AgentState) -> AgentState:
         """Search for relevant codes using vector search"""
         try:
-            query = state.get("user_query", "")
-            codes = self.vector_service.search_codes(query, limit=10)
+            # Prefer diagnosis phrases extracted by the LLM; fall back to the
+            # full user query if we don't have any.
+            phrases = state.get("diagnosis_phrases") or [state.get("user_query", "")]
+            search_text = "; ".join([p for p in phrases if p])
+
+            codes = self.vector_service.search_codes(search_text, limit=10)
             state["codes"] = codes
             
             # Track which vocabularies / coding systems are represented
@@ -136,7 +164,7 @@ class CohortAgent:
                     {c.get("vocabulary") for c in codes if c.get("vocabulary")}
                 )
                 state["vocabularies"] = vocabularies
-            else:
+            if not codes:
                 # No codes from vector search – don't hard fail. We'll fall back
                 # to using only the original user query when building the Genie
                 # request so the LLM still has a chance to interpret intent.
