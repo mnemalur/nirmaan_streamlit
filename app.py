@@ -131,6 +131,43 @@ def initialize_services():
         return False
 
 
+def run_databricks_health_check():
+    """Run a simple SELECT 1 against the configured Databricks SQL Warehouse."""
+    try:
+        from config import config as db_config
+        from databricks.sql import connect
+
+        # Ensure required configuration is present
+        missing = []
+        if not db_config.host:
+            missing.append("DATABRICKS_HOST")
+        if not db_config.token:
+            missing.append("DATABRICKS_TOKEN")
+        if not db_config.warehouse_id:
+            missing.append("SQL_WAREHOUSE_ID")
+
+        if missing:
+            return False, f"Missing required configuration: {', '.join(missing)}"
+
+        server_hostname = db_config.host.replace("https://", "").replace("http://", "")
+        http_path = f"/sql/1.0/warehouses/{db_config.warehouse_id}"
+
+        # Open a short-lived connection and run a trivial query
+        with connect(
+            server_hostname=server_hostname,
+            http_path=http_path,
+            access_token=db_config.token,
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                row = cursor.fetchone()
+
+        return True, row[0] if row else None
+    except Exception as e:
+        logger.error(f"Databricks health check failed: {e}", exc_info=True)
+        return False, str(e)
+
+
 def render_config_page():
     """Configuration page for Databricks credentials"""
     st.title("🔧 Configuration")
@@ -215,6 +252,16 @@ def render_config_page():
                     st.rerun()
                 else:
                     st.error("❌ Failed to initialize services. Please check your configuration.")
+
+    st.markdown("### Connection Health Check")
+    st.caption("Run a simple test query on your SQL Warehouse to validate connectivity.")
+    if st.button("Test Databricks connection", use_container_width=True):
+        with st.spinner("Running health check..."):
+            ok, info = run_databricks_health_check()
+        if ok:
+            st.success(f"✅ Databricks SQL Warehouse is reachable (SELECT 1 returned {info}).")
+        else:
+            st.error(f"❌ Databricks health check failed: {info}")
 
 
 def render_chat_page():
