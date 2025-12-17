@@ -188,18 +188,25 @@ def search_codes_for_criteria(criteria_text: str):
         st.error("Vector search service is not initialized. Please check configuration.")
         return
 
-    # Use the intent service (if available) to extract diagnosis phrases to feed into vector search
-    try:
-        if hasattr(st.session_state, "intent_service") and st.session_state.intent_service is not None:
-            phrases = st.session_state.intent_service.extract_diagnosis_phrases(criteria_text)
-            search_text = "; ".join([p for p in phrases if p])
-        else:
-            search_text = criteria_text
-    except Exception as e:
-        logger.warning(f"Intent extraction before code search failed, using raw criteria: {e}")
-        search_text = criteria_text
+    # Prefer the structured "conditions" extracted during criteria analysis.
+    analysis = st.session_state.get("criteria_analysis") or {}
+    conditions = analysis.get("conditions") or []
 
-    st.markdown("**Phrases I used to search for codes**")
+    if conditions:
+        search_text = "; ".join(conditions)
+    else:
+        # Fallback: use the intent service (if available) to extract diagnosis phrases
+        try:
+            if hasattr(st.session_state, "intent_service") and st.session_state.intent_service is not None:
+                phrases = st.session_state.intent_service.extract_diagnosis_phrases(criteria_text)
+                search_text = "; ".join([p for p in phrases if p])
+            else:
+                search_text = criteria_text
+        except Exception as e:
+            logger.warning(f"Intent extraction before code search failed, using raw criteria: {e}")
+            search_text = criteria_text
+
+    st.markdown("**Text I used to search for codes**")
     st.write(search_text)
 
     try:
