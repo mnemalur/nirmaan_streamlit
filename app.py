@@ -63,6 +63,8 @@ if 'code_search_error' not in st.session_state:
     st.session_state.code_search_error = ""
 if 'selected_codes' not in st.session_state:
     st.session_state.selected_codes = []
+if 'genie_result' not in st.session_state:
+    st.session_state.genie_result = None
 
 
 def initialize_services():
@@ -248,6 +250,67 @@ def refine_criteria_with_codes():
     st.session_state.refined_criteria_text = refined_text
 
     return refined_text
+
+
+def run_genie_for_refined_criteria():
+    """Call Genie with the refined criteria and selected codes, and store the result."""
+    refined = st.session_state.get("refined_criteria") or {}
+    refined_text = st.session_state.get("refined_criteria_text") or ""
+    selected_codes = st.session_state.get("selected_codes") or []
+
+    if not refined_text or not selected_codes:
+        st.error("I need both a refined criteria and at least one selected code before calling Genie.")
+        return
+
+    if not hasattr(st.session_state, "genie_service") or st.session_state.genie_service is None:
+        st.error("Genie service is not initialized. Please check configuration.")
+        return
+
+    # Build the criteria dict expected by GenieService._build_nl_query
+    unique_codes = sorted({c.get("code") for c in selected_codes if c.get("code")})
+    code_details = []
+    vocabularies = set()
+    for c in selected_codes:
+        code = c.get("code")
+        if not code:
+            continue
+        desc = c.get("description") or ""
+        vocab = c.get("vocabulary")
+        if vocab:
+            vocabularies.add(vocab)
+        code_details.append(
+            {
+                "code": code,
+                "description": desc,
+                "vocabulary": vocab,
+            }
+        )
+
+    genie_criteria = {
+        "codes": unique_codes,
+        "code_details": code_details,
+        "vocabularies": sorted(vocabularies),
+        # We use the refined natural-language criteria as the primary description.
+        "original_query": refined_text,
+        "timeframe": refined.get("timeframe"),
+        "age": None,
+    }
+
+    genie = st.session_state.genie_service
+
+    with st.spinner("Asking Genie to generate and run the cohort SQL..."):
+        try:
+            result = genie.create_cohort_query(genie_criteria)
+        except Exception as e:
+            st.error(f"Error while calling Genie: {e}")
+            logger.error(f"Genie error: {e}", exc_info=True)
+            return
+
+    st.session_state.genie_result = result
+    st.session_state.genie_conversation_id = result.get("conversation_id")
+
+    # Small success message; the detailed SQL/results are rendered in the main UI below.
+    st.success("Genie has finished generating and running the query for this criteria.")
 
 
 def search_codes_for_criteria(criteria_text: str):
@@ -621,11 +684,32 @@ def render_chat_page():
                 if refined_text:
                     st.subheader("Refined criteria I'll use going forward")
                     st.write(refined_text)
+                    # Offer to send this refined criteria to Genie
+                    if st.button("Ask Genie to find patients for this refined criteria", use_container_width=True):
+                        run_genie_for_refined_criteria()
         else:
             st.warning(
                 "You haven't selected any codes yet. I won't be able to build a cohort "
                 "until there is at least one code to represent the condition."
             )
+
+    # If Genie has run, surface a concise view of what it did.
+    genie_result = st.session_state.get("genie_result")
+    if genie_result:
+        st.markdown("### Results from Genie (Text-to-SQL)")
+        sql = genie_result.get("sql")
+        row_count = genie_result.get("row_count", 0)
+        exec_time = genie_result.get("execution_time")
+
+        if sql:
+            st.subheader("Generated SQL")
+            st.code(sql, language="sql")
+
+        if row_count is not None:
+            st.info(f"Genie reports {row_count} row(s) returned for this cohort query.")
+
+        if exec_time is not None:
+            st.caption(f"Query execution time (as reported by Genie): {exec_time}")
 
 
 def process_query(query: str):

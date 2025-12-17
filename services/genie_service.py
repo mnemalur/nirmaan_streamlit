@@ -53,23 +53,40 @@ class GenieService:
         self.poll_interval = 2  # seconds
     
     def create_cohort_query(self, criteria: Dict) -> Dict:
-        """Build the Genie prompt and (in preview mode) return it without calling Genie.
+        """Create a new Genie conversation for a cohort query and poll until complete.
 
-        This lets us show the enriched, code-aware request to the user first,
-        before we actually hit the Genie API or materialize anything.
+        This uses the refined, code-aware natural language criteria to ask Genie
+        to generate SQL, execute it against the warehouse, and return results.
+        Because this can take time, we poll the message status until it is
+        COMPLETED or times out.
         """
         
         # Build natural language query / prompt for Genie
         nl_query = self._build_nl_query(criteria)
-        
-        logger.info(f"[PREVIEW] Genie prompt built (not sent): {nl_query}")
-        
-        # In preview mode, don't call the remote Genie service
+        logger.info(f"Sending cohort request to Genie: {nl_query}")
+
+        # Start a new Genie conversation by creating the first message without
+        # specifying a conversation_id.
+        message = self.w.genie.create_message(
+            space_id=self.space_id,
+            content=nl_query,
+        )
+
+        conversation_id = getattr(message, "conversation_id", None)
+        if not conversation_id:
+            # Fallback: some SDK versions may expose conversation id differently
+            conversation_id = getattr(message, "id", None)
+        logger.info(f"Started Genie conversation: {conversation_id}")
+
+        # Poll until the message completes
+        result = self._poll_for_completion(conversation_id, message.id)
+
         return {
-            'sql': None,
-            'conversation_id': None,
-            'execution_time': None,
-            'row_count': 0,
+            'sql': result.get('sql'),
+            'data': result.get('data', []),
+            'execution_time': result.get('execution_time'),
+            'row_count': result.get('row_count', 0),
+            'conversation_id': conversation_id,
             'prompt': nl_query,
         }
     
