@@ -51,6 +51,8 @@ if 'criteria_text' not in st.session_state:
     st.session_state.criteria_text = ""
 if 'codes' not in st.session_state:
     st.session_state.codes = []
+if 'selected_codes' not in st.session_state:
+    st.session_state.selected_codes = []
 
 
 def initialize_services():
@@ -229,13 +231,51 @@ def search_codes_for_criteria(criteria_text: str):
     st.markdown(
         "I've taken your criteria and, based on the key clinical phrases, "
         "looked up relevant standard codes across the available vocabularies. "
-        "You can review these now before we move on to SQL and patient counts in later steps."
+        "Review them below and decide whether to use all of them or only a subset."
     )
     st.subheader("📋 Relevant codes I found")
     code_df = pd.DataFrame(codes)
-    display_cols = ['code', 'description', 'vocabulary', 'confidence']
+    # For now we hide the numeric confidence from the UI because your function
+    # already filters to the best matches, and we don't want to mislead users
+    # with artificial scores. We keep it internally in case we need it later.
+    display_cols = ['code', 'description', 'vocabulary']
     available_cols = [col for col in display_cols if col in code_df.columns]
     st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+
+    # Simple, conversational selection experience:
+    st.markdown("### How should I use these codes?")
+    choice = st.radio(
+        "",
+        ["Use all suggested codes", "Let me choose specific codes"],
+        index=0,
+        horizontal=True,
+    )
+
+    selected_codes = codes
+    if choice == "Let me choose specific codes":
+        # Build nice labels for the multiselect
+        label_to_code = {
+            f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
+            for c in codes
+        }
+        selected_labels = st.multiselect(
+            "Choose the codes you want me to use when I go look for patients:",
+            options=list(label_to_code.keys()),
+        )
+        selected_codes = [label_to_code[label] for label in selected_labels]
+
+    st.session_state.selected_codes = selected_codes
+
+    if selected_codes:
+        st.success(
+            f"I'll carry forward {len(selected_codes)} code(s) when we move on to "
+            "build the cohort definition and, in the next milestone, search for patients."
+        )
+    else:
+        st.warning(
+            "You haven't selected any codes yet. I won't be able to build a cohort "
+            "until there is at least one code to represent the condition."
+        )
 
 
 def render_config_page():
