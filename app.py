@@ -300,6 +300,11 @@ def render_chat_page():
 
     # Criteria understanding (Milestone 1) – lightweight analysis before the full agent flow
     with st.expander("🧩 Understand my clinical criteria (Milestone 1)", expanded=True):
+        st.caption(
+            "I’ll read your draft criteria, summarize how I understand it, "
+            "highlight key clinical concepts, and call out anything that seems ambiguous "
+            "before moving on to look up standard diagnosis and drug codes."
+        )
         with st.form("criteria_analysis_form"):
             criteria_text = st.text_area(
                 "Describe your clinical criteria in natural language",
@@ -339,10 +344,18 @@ def render_chat_page():
             ambiguities = analysis.get("ambiguities", [])
             st.markdown("**Ambiguities / things to clarify**")
             if ambiguities:
+                st.info(
+                    f"I see {len(ambiguities)} point(s) that could affect how I match this "
+                    "to patients. You can refine the criteria now, or continue and I’ll still "
+                    "try to find the best matching codes based on what you wrote."
+                )
                 for a in ambiguities:
                     st.markdown(f"- {a}")
             else:
-                st.write("None detected; criteria looks fairly specific.")
+                st.success(
+                    "I don’t see major ambiguities. This looks specific enough to start "
+                    "mapping to standard codes in the next step."
+                )
     
     # Sidebar with example queries
     with st.sidebar:
