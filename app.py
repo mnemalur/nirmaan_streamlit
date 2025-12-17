@@ -53,6 +53,12 @@ if 'codes' not in st.session_state:
     st.session_state.codes = []
 if 'selected_codes' not in st.session_state:
     st.session_state.selected_codes = []
+if 'refined_criteria' not in st.session_state:
+    st.session_state.refined_criteria = None
+if 'refined_criteria_text' not in st.session_state:
+    st.session_state.refined_criteria_text = ""
+if 'selected_codes' not in st.session_state:
+    st.session_state.selected_codes = []
 
 
 def initialize_services():
@@ -180,6 +186,58 @@ def run_databricks_health_check():
         return False, str(e)
 
 
+def refine_criteria_with_codes():
+    """Build a refined, natural-language criteria description using selected codes."""
+    analysis = st.session_state.get("criteria_analysis") or {}
+    selected_codes = st.session_state.get("selected_codes") or []
+    original_text = st.session_state.get("criteria_text") or ""
+
+    if not selected_codes:
+        st.warning("No codes selected to refine the criteria.")
+        return ""
+
+    summary = analysis.get("summary") or original_text
+    conditions = analysis.get("conditions") or []
+    demographics = analysis.get("demographics") or []
+    timeframe = analysis.get("timeframe") or ""
+
+    refined_text = summary.strip() if summary else original_text.strip()
+
+    # We avoid repeating all individual codes in the user-facing text since the
+    # user has already reviewed them and they will be used in the WHERE clause.
+    # Instead, we acknowledge that we will use the selected standard codes for
+    # the condition(s) they described.
+    if conditions:
+        if refined_text and not refined_text.endswith("."):
+            refined_text += "."
+        cond_text = ", ".join(conditions)
+        refined_text += (
+            f" I will use the standard diagnosis codes you just reviewed for: {cond_text}."
+        )
+
+    if timeframe:
+        if not refined_text.endswith("."):
+            refined_text += "."
+        refined_text += f" The timeframe is {timeframe}."
+
+    if demographics:
+        if not refined_text.endswith("."):
+            refined_text += "."
+        refined_text += " Demographic filters include: " + ", ".join(demographics) + "."
+
+    st.session_state.refined_criteria = {
+        "original_text": original_text,
+        "summary": summary,
+        "conditions": conditions,
+        "selected_codes": selected_codes,
+        "demographics": demographics,
+        "timeframe": timeframe,
+    }
+    st.session_state.refined_criteria_text = refined_text
+
+    return refined_text
+
+
 def search_codes_for_criteria(criteria_text: str):
     """Use vector search to find standard codes for the given criteria text."""
     if not criteria_text:
@@ -271,6 +329,12 @@ def search_codes_for_criteria(criteria_text: str):
             f"I'll carry forward {len(selected_codes)} code(s) when we move on to "
             "build the cohort definition and, in the next milestone, search for patients."
         )
+
+        if st.button("Add these codes and refine criteria", use_container_width=True):
+            refined_text = refine_criteria_with_codes()
+            if refined_text:
+                st.subheader("Refined criteria I'll use going forward")
+                st.write(refined_text)
     else:
         st.warning(
             "You haven't selected any codes yet. I won't be able to build a cohort "
