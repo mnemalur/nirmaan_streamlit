@@ -47,6 +47,10 @@ if 'agent_state' not in st.session_state:
     st.session_state.agent_state = {}
 if 'criteria_analysis' not in st.session_state:
     st.session_state.criteria_analysis = None
+if 'criteria_text' not in st.session_state:
+    st.session_state.criteria_text = ""
+if 'codes' not in st.session_state:
+    st.session_state.codes = []
 
 
 def initialize_services():
@@ -172,6 +176,56 @@ def run_databricks_health_check():
     except Exception as e:
         logger.error(f"Databricks health check failed: {e}", exc_info=True)
         return False, str(e)
+
+
+def search_codes_for_criteria(criteria_text: str):
+    """Use vector search to find standard codes for the given criteria text."""
+    if not criteria_text:
+        st.error("No criteria available to search for codes.")
+        return
+
+    if not hasattr(st.session_state, "vector_service") or st.session_state.vector_service is None:
+        st.error("Vector search service is not initialized. Please check configuration.")
+        return
+
+    # Use the intent service (if available) to extract diagnosis phrases to feed into vector search
+    try:
+        if hasattr(st.session_state, "intent_service") and st.session_state.intent_service is not None:
+            phrases = st.session_state.intent_service.extract_diagnosis_phrases(criteria_text)
+            search_text = "; ".join([p for p in phrases if p])
+        else:
+            search_text = criteria_text
+    except Exception as e:
+        logger.warning(f"Intent extraction before code search failed, using raw criteria: {e}")
+        search_text = criteria_text
+
+    try:
+        with st.spinner("Looking up matching diagnosis and drug codes..."):
+            codes = st.session_state.vector_service.search_codes(search_text, limit=10)
+    except Exception as e:
+        st.error(f"Error searching for codes: {e}")
+        logger.error(f"Code search error: {e}", exc_info=True)
+        return
+
+    if not codes:
+        st.warning(
+            "I couldn't find any standard codes from this description. "
+            "You may want to specify a more precise condition or drug name in your criteria."
+        )
+        return
+
+    st.session_state.codes = codes
+
+    st.markdown(
+        "I've taken your criteria and, based on the key clinical phrases, "
+        "looked up relevant standard codes across the available vocabularies. "
+        "You can review these now before we move on to SQL and patient counts in later steps."
+    )
+    st.subheader("📋 Relevant codes I found")
+    code_df = pd.DataFrame(codes)
+    display_cols = ['code', 'description', 'vocabulary', 'confidence']
+    available_cols = [col for col in display_cols if col in code_df.columns]
+    st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
 
 
 def render_config_page():
@@ -321,6 +375,7 @@ def render_chat_page():
                 with st.spinner("Analyzing criteria..."):
                     analysis = st.session_state.intent_service.analyze_criteria(criteria_text)
                     st.session_state.criteria_analysis = analysis
+                    st.session_state.criteria_text = criteria_text
 
         analysis = st.session_state.get("criteria_analysis")
         if analysis:
@@ -363,8 +418,8 @@ def render_chat_page():
             if ambiguities:
                 st.info(
                     f"I see {len(ambiguities)} point(s) that could affect how I match this "
-                    "to patients. You can refine the criteria now, or, in the chat below, "
-                    "add clarifications or just type **“continue with this criteria”** and "
+                    "to patients. You can refine the text above and re-run the analysis, or "
+                    "click **Continue with this criteria and search for codes** below and "
                     "I’ll still try to find the best matching codes based on what you wrote."
                 )
                 for a in ambiguities:
@@ -372,74 +427,18 @@ def render_chat_page():
             else:
                 st.success(
                     "I don’t see major ambiguities. This looks specific enough to start "
-                    "mapping to standard codes in the next step. In the chat below you can "
-                    "either refine this further or just say **“continue with this criteria”**."
+                    "mapping to standard codes in the next step. You can tweak the text above "
+                    "or go ahead and click **Continue with this criteria and search for codes**."
                 )
+
+            # Let the user move from understanding → action in one click
+            if st.button("Continue with this criteria and search for codes", use_container_width=True):
+                criteria_text_for_codes = st.session_state.get("criteria_text") or ""
+                search_codes_for_criteria(criteria_text_for_codes)
     
-    # Sidebar with example queries
-    with st.sidebar:
-        st.header("💡 Example Queries")
-        st.markdown("**New Cohort:**")
-        example_queries = [
-            "Find patients with heart failure",
-            "Show me diabetes patients over 65",
-            "Patients with myocardial infarction in the last 30 days",
-            "Find knee replacement patients"
-        ]
-        
-        for idx, example in enumerate(example_queries):
-            if st.button(example, key=f"new_cohort_example_{idx}", use_container_width=True):
-                st.session_state.user_query = example
-                st.rerun()
-        
-        st.divider()
-        st.markdown("**Follow-up Questions:**")
-        st.caption("Ask after creating a cohort:")
-        follow_up_examples = [
-            "What are the demographics?",
-            "Show me site characteristics",
-            "What are the admission trends?",
-            "Tell me about outcomes"
-        ]
-        
-        for idx, example in enumerate(follow_up_examples):
-            if st.button(example, key=f"followup_example_{idx}", use_container_width=True):
-                st.session_state.user_query = example
-                st.rerun()
-        
-        st.divider()
-        
-        if st.button("🔄 Clear Session", use_container_width=True):
-            st.session_state.messages = []
-            st.session_state.cohort_table = None
-            st.session_state.genie_conversation_id = None
-            st.session_state.agent_state = {}
-            st.session_state.cohort_count = 0
-            st.rerun()
-    
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if "data" in message:
-                st.json(message["data"])
-    
-    # Chat input form
-    with st.form("chat_form", clear_on_submit=True):
-        user_input = st.text_input(
-            "Enter your query",
-            value=st.session_state.get('user_query', ''),
-            placeholder="e.g., Find patients with heart failure over 65 years old",
-            key="chat_input"
-        )
-        submitted = st.form_submit_button("Send", type="primary", use_container_width=True)
-        
-        if submitted and user_input:
-            # Clear the user_query from session state
-            if 'user_query' in st.session_state:
-                del st.session_state.user_query
-            
-            process_query(user_input)
+    # For Milestone 1 we keep the experience focused on criteria understanding.
+    # The full multi-turn chat and example buttons will be reintroduced in later
+    # milestones when the end-to-end agent flow (codes + SQL + insights) is ready.
 
 
 def process_query(query: str):
