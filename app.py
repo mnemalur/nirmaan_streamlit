@@ -201,7 +201,15 @@ def refine_criteria_with_codes():
         return ""
 
     summary = analysis.get("summary") or original_text
-    conditions = analysis.get("conditions") or []
+    # Prefer the set of conditions that actually have selected codes, so that
+    # the refined criteria text matches what will be used downstream.
+    conditions_from_codes = sorted(
+        {c.get("condition") for c in selected_codes if c.get("condition")}
+    )
+    if conditions_from_codes:
+        conditions = conditions_from_codes
+    else:
+        conditions = analysis.get("conditions") or []
     demographics = analysis.get("demographics") or []
     timeframe = analysis.get("timeframe") or ""
 
@@ -555,35 +563,49 @@ def render_chat_page():
         for cond, cond_codes in grouped.items():
             st.markdown(f"- **{cond}**: {len(cond_codes)} code(s)")
 
-        st.markdown("### Review and (optionally) trim codes per condition")
+        st.markdown("### How should I use these codes?")
+        overall_choice = st.radio(
+            "",
+            ["Use all suggested codes (recommended)", "Customize codes per condition"],
+            index=0,
+            horizontal=True,
+        )
+
         selected_codes: list[dict] = []
 
-        # For each condition, show its codes in an expander with a multiselect that
-        # defaults to all codes selected. This way, the user can quickly see that
-        # everything is covered, but can also deselect any codes they don't want.
-        for idx, (cond, cond_codes) in enumerate(grouped.items()):
-            with st.expander(f"Codes for: {cond} ({len(cond_codes)} code(s))", expanded=(len(grouped) == 1)):
-                code_df = pd.DataFrame(cond_codes)
-                display_cols = ['code', 'description', 'vocabulary']
-                available_cols = [col for col in display_cols if col in code_df.columns]
-                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+        if overall_choice.startswith("Use all"):
+            # Simple path: take everything from all conditions, no extra UI.
+            for cond_codes in grouped.values():
+                selected_codes.extend(cond_codes)
+        else:
+            st.markdown(
+                "You can fine-tune codes per condition below. By default, nothing is selected; "
+                "pick only the codes you want me to use for each condition."
+            )
 
-                label_to_code = {
-                    f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
-                    for c in cond_codes
-                }
-                options = list(label_to_code.keys())
-                default_selection = options  # preselect all by default
+            # For each condition, show its codes in an expander with a multiselect that
+            # starts empty. This keeps the UI light until the user chooses to customize.
+            for idx, (cond, cond_codes) in enumerate(grouped.items()):
+                with st.expander(f"Codes for: {cond} ({len(cond_codes)} code(s))", expanded=(len(grouped) == 1)):
+                    code_df = pd.DataFrame(cond_codes)
+                    display_cols = ['code', 'description', 'vocabulary']
+                    available_cols = [col for col in display_cols if col in code_df.columns]
+                    st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
 
-                selected_labels = st.multiselect(
-                    f"Codes to use for {cond}:",
-                    options=options,
-                    default=default_selection,
-                    key=f"codes_select_{idx}",
-                )
+                    label_to_code = {
+                        f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
+                        for c in cond_codes
+                    }
+                    options = list(label_to_code.keys())
 
-                for label in selected_labels:
-                    selected_codes.append(label_to_code[label])
+                    selected_labels = st.multiselect(
+                        f"Codes to use for {cond}:",
+                        options=options,
+                        key=f"codes_select_{idx}",
+                    )
+
+                    for label in selected_labels:
+                        selected_codes.append(label_to_code[label])
 
         st.session_state.selected_codes = selected_codes
 
