@@ -57,7 +57,10 @@ class VectorSearchService:
         escaped = clinical_text.replace("'", "''") if clinical_text else ""
 
         # Treat the UC function as a table function and invoke it from SQL.
-        sql = f"SELECT * FROM {self.function_fqn}(query_text => '{escaped}')"
+        # Your function is defined to be called like:
+        #   SELECT concept_code, concept_name, vocabulary_id FROM <fqn>('retinopathy')
+        # so we pass the clinical text as a single positional argument.
+        sql = f"SELECT * FROM {self.function_fqn}('{escaped}')"
         logger.info(f"Executing vector search SQL via warehouse: {sql}")
 
         codes: List[Dict] = []
@@ -73,13 +76,25 @@ class VectorSearchService:
                 cols = [d[0] for d in cursor.description]
                 for row in cursor.fetchall():
                     rec = dict(zip(cols, row))
-                    # Map expected columns from the function result
+                    # Map expected columns from the function result. Different implementations
+                    # might use slightly different column names (e.g., concept_code vs source_code,
+                    # search_score vs similarity_score), so we handle the common variants.
+                    code_val = rec.get("concept_code") or rec.get("source_code")
+                    desc_val = rec.get("concept_name") or rec.get("description")
+                    vocab_val = rec.get("vocabulary_id") or rec.get("vocabulary")
+                    # If your function already filters to the best matches and does
+                    # not expose a score, we can treat them as 100%-confidence hits.
+                    raw_score = rec.get("search_score")
+                    if raw_score is None:
+                        raw_score = rec.get("similarity_score")
+                    confidence = 100 if raw_score is None else raw_score * 100
+
                     codes.append(
                         {
-                            "code": rec.get("source_code"),
-                            "description": rec.get("concept_name"),
-                            "vocabulary": rec.get("vocabulary_id"),
-                            "confidence": (rec.get("similarity_score") or 0) * 100,
+                            "code": code_val,
+                            "description": desc_val,
+                            "vocabulary": vocab_val,
+                            "confidence": confidence,
                             "reason": f"Match based on semantic similarity to '{clinical_text}'",
                         }
                     )
