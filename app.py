@@ -134,7 +134,11 @@ def initialize_services():
 def run_databricks_health_check():
     """Run a simple SELECT 1 against the configured Databricks SQL Warehouse."""
     try:
-        from config import config as db_config
+        # Reload config to pick up any values saved via the UI/config form
+        import importlib
+        import config as config_module
+        importlib.reload(config_module)
+        db_config = config_module.config
         from databricks.sql import connect
 
         # Ensure required configuration is present
