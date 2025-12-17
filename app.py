@@ -367,13 +367,20 @@ def process_query(query: str):
                         available_cols = [col for col in display_cols if col in code_df.columns]
                         st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                     
-                    # Display SQL if available
+                    # Show preview of the Genie request (prompt) instead of calling Genie
+                    genie_prompt = result_state.get("genie_prompt")
+                    if genie_prompt:
+                        st.subheader("🧠 Genie Request Preview (not yet executed)")
+                        st.code(genie_prompt, language="markdown")
+                        st.info("This is the enriched, code-aware request that would be sent to Genie.")
+                    
+                    # Display SQL if available (will be None in preview mode)
                     sql = result_state.get("sql")
                     if sql:
                         st.subheader("📝 Generated SQL")
                         st.code(sql, language="sql")
                     
-                    # Display cohort results
+                    # Display cohort results (not used in preview mode)
                     count = result_state.get("cohort_count", 0)
                     if count > 0:
                         st.success(f"✅ Found {count} patients")

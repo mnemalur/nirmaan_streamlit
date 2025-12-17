@@ -53,51 +53,24 @@ class GenieService:
         self.poll_interval = 2  # seconds
     
     def create_cohort_query(self, criteria: Dict) -> Dict:
-        """
-        Use Genie to generate SQL for cohort
-        Polls for completion instead of waiting
-        
-        Args:
-            criteria: {
-                'codes': ['I21.09', 'I21.01'],
-                'timeframe': '30 days',
-                'age': '> 50',
-                'labs': []
-            }
-        
-        Returns:
-            {
-                'sql': 'SELECT ...',
-                'conversation_id': '...',
-                'execution_time': 2.5,
-                'row_count': 237
-            }
+        """Build the Genie prompt and (in preview mode) return it without calling Genie.
+
+        This lets us show the enriched, code-aware request to the user first,
+        before we actually hit the Genie API or materialize anything.
         """
         
-        # Build natural language query
+        # Build natural language query / prompt for Genie
         nl_query = self._build_nl_query(criteria)
         
-        logger.info(f"Sending query to Genie: {nl_query}")
+        logger.info(f"[PREVIEW] Genie prompt built (not sent): {nl_query}")
         
-        # Create Genie message
-        message = self.w.genie.create_message(
-            space_id=self.space_id,
-            content=nl_query
-        )
-        
-        conversation_id = message.conversation_id
-        message_id = message.id
-        
-        logger.info(f"Genie message created: conversation_id={conversation_id}, message_id={message_id}")
-        
-        # Poll for completion
-        result = self._poll_for_completion(conversation_id, message_id)
-        
+        # In preview mode, don't call the remote Genie service
         return {
-            'sql': result['sql'],
-            'conversation_id': conversation_id,
-            'execution_time': result.get('execution_time'),
-            'row_count': result.get('row_count', 0)
+            'sql': None,
+            'conversation_id': None,
+            'execution_time': None,
+            'row_count': 0,
+            'prompt': nl_query,
         }
     
     def follow_up_question(self, conversation_id: str, question: str) -> Dict:
@@ -256,56 +229,84 @@ class GenieService:
         return None
     
     def _build_nl_query(self, criteria: Dict) -> str:
-        """
-        Convert structured criteria to natural language for Genie
-        Uses actual table names: patdemo, paticd, patcpt
-        """
-        
-        codes_str = ', '.join(criteria['codes'])
-        vocabulary = criteria.get('vocabulary', 'ICD10CM')
-        
-        query_parts = [
-            f"Find all patients from {config.patient_table_prefix}.patdemo",
-            f"joined with {config.patient_table_prefix}.paticd for diagnoses",
-        ]
-        
-        # Add diagnosis code filter
-        query_parts.append(f"where diagnosis codes (from paticd table) include: {codes_str}")
-        
-        # Add timeframe
-        if criteria.get('timeframe'):
-            query_parts.append(f"and admission_date (from patdemo) is within the last {criteria['timeframe']}")
-        
-        # Add age filter
-        if criteria.get('age'):
-            query_parts.append(f"and age (from patdemo) is {criteria['age']}")
-        
-        # Add lab conditions
-        if criteria.get('labs'):
-            lab_conditions = ', '.join(criteria['labs'])
-            query_parts.append(f"with lab conditions: {lab_conditions}")
-        
-        # Add procedure filters if any
-        if criteria.get('procedures'):
-            query_parts.append(f"joined with {config.patient_table_prefix}.patcpt for procedures")
-            proc_codes = ', '.join(criteria['procedures'])
-            query_parts.append(f"where procedure codes include: {proc_codes}")
-        
-        # Specify return columns
-        query_parts.append("""
-Return these columns:
-- patient_id (from patdemo)
-- admission_date (from patdemo)
-- age (from patdemo)
-- gender (from patdemo)
-- length_of_stay (from patdemo)
-- site_name (from patdemo)
-- primary diagnosis code (from paticd where diagnosis_type = 'primary')
+        """Build a *structured* request for Genie using vector-search codes.
 
-Make sure to use proper JOINs and handle multiple diagnoses per patient.
-        """.strip())
-        
-        return " ".join(query_parts)
+        We assume Genie already knows your data model and joins, so we do NOT
+        tell it which tables or columns to use. Instead we:
+        - Restate the user's original intent
+        - Provide the exact standard codes (with descriptions) that should
+          represent that intent
+        - Provide simple, high-level filters (timeframe, age, etc.)
+        """
+
+        codes = criteria.get("codes", []) or []
+        # Either a single vocabulary or a list of vocabularies / coding systems
+        vocabularies = criteria.get("vocabularies") or []
+        vocabulary = criteria.get("vocabulary", "ICD10CM")
+        original_query = criteria.get("original_query") or ""
+        code_details = criteria.get("code_details", []) or []
+        timeframe = criteria.get("timeframe")
+        age_filter = criteria.get("age")
+
+        # Build a structured, Genie-friendly prompt
+        lines: list[str] = []
+
+        lines.append(
+            "You are a SQL generator for our clinical data warehouse. "
+            "You already know the schema, table relationships, and best practices "
+            "for querying it. Generate a single SQL query that returns the patient "
+            "cohort described below."
+        )
+
+        if original_query:
+            lines.append("")
+            lines.append("User's original clinical intent:")
+            lines.append(f"- {original_query}")
+
+        if code_details or codes:
+            lines.append("")
+            if vocabularies:
+                lines.append(
+                    "Diagnosis/code signal from semantic vector search over the "
+                    f"following vocabularies/coding systems: {', '.join(vocabularies)}."
+                )
+            else:
+                lines.append(
+                    f"Diagnosis code signal (semantic vector search, vocabulary={vocabulary}):"
+                )
+            if code_details:
+                for c in code_details:
+                    code = c.get("code")
+                    desc = c.get("description") or ""
+                    vocab = c.get("vocabulary") or vocabulary
+                    if code:
+                        lines.append(f"- code={code}, description={desc}, vocabulary={vocab}")
+            elif codes:
+                # Fallback: we only have raw codes
+                lines.append(f"- codes: {', '.join(codes)}")
+
+        # High-level filters
+        lines.append("")
+        lines.append("Additional cohort filters (high-level, you choose columns/tables):")
+        if timeframe:
+            lines.append(f"- timeframe: within the last {timeframe}")
+        else:
+            lines.append("- timeframe: not specified")
+
+        if age_filter:
+            lines.append(f"- age filter: {age_filter}")
+        else:
+            lines.append("- age filter: not specified")
+
+        # Final instructions
+        lines.append("")
+        lines.append("Requirements for the SQL you generate:")
+        lines.append("- Use the appropriate tables and joins from our existing data model.")
+        lines.append("- Use EXACTLY the diagnosis codes listed above for the primary condition filter.")
+        lines.append("- Apply the additional filters where appropriate.")
+        lines.append("- Return a coherent patient cohort result set (one row per patient/encounter as appropriate).")
+
+        return "\n".join(lines)
 
 
 # Example usage

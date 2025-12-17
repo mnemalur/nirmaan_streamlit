@@ -18,6 +18,8 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     user_query: str
     codes: list
+    vocabularies: list  # list of vocabulary_ids / coding systems represented in codes
+    genie_prompt: str   # enriched, code-aware request that would be sent to Genie
     cohort_table: str
     cohort_count: int
     genie_conversation_id: str
@@ -66,9 +68,14 @@ class CohortAgent:
         )
         
         # Flow for new cohort creation
+        # For now, we stop after generating the enriched Genie request
+        # so users can review codes and the structured prompt before we
+        # actually call Genie or materialize the cohort.
         workflow.add_edge("search_codes", "generate_sql")
-        workflow.add_edge("generate_sql", "materialize_cohort")
-        workflow.add_edge("materialize_cohort", END)
+        workflow.add_edge("generate_sql", END)
+        # Later, when enabling full flow:
+        # workflow.add_edge("generate_sql", "materialize_cohort")
+        # workflow.add_edge("materialize_cohort", END)
         
         # Flow for questions/insights
         workflow.add_edge("answer_question", END)
@@ -122,6 +129,14 @@ class CohortAgent:
             codes = self.vector_service.search_codes(query, limit=10)
             state["codes"] = codes
             
+            # Track which vocabularies / coding systems are represented
+            # (e.g., ICD10CM, SNOMED, LOINC, etc.)
+            if codes:
+                vocabularies = sorted(
+                    {c.get("vocabulary") for c in codes if c.get("vocabulary")}
+                )
+                state["vocabularies"] = vocabularies
+            
             if not codes:
                 state["error"] = "No relevant codes found. Please try rephrasing your query."
                 state["current_step"] = "error"
@@ -143,14 +158,35 @@ class CohortAgent:
                 return state
             
             # Extract criteria from query (simplified - could be enhanced with NLP)
+            # Include both the original user query and full code details so Genie
+            # gets a precise, disambiguated description of the clinical intent.
+            top_codes = codes[:5]
             criteria = {
-                'codes': [c['code'] for c in codes[:5]],
-                'timeframe': '30 days',  # Could extract from query
-                'age': None,  # Could extract from query
+                # Just the raw codes (used for WHERE clause)
+                'codes': [c['code'] for c in top_codes],
+                # Original natural language query from the user
+                'original_query': state.get("user_query", ""),
+                # Full code details (code + description + vocabulary) from vector search
+                'code_details': [
+                    {
+                        'code': c.get('code'),
+                        'description': c.get('description'),
+                        'vocabulary': c.get('vocabulary')
+                    }
+                    for c in top_codes
+                ],
+                # All vocabularies / coding systems involved (if any)
+                'vocabularies': state.get("vocabularies", []),
+                'timeframe': '30 days',  # Could extract from query later
+                'age': None,  # Could extract from query later
                 'patient_table_prefix': config.patient_table_prefix
             }
             
             result = self.genie_service.create_cohort_query(criteria)
+
+            # In preview mode, we only care about the constructed Genie prompt.
+            # SQL and conversation_id will be None until we enable the full flow.
+            state["genie_prompt"] = result.get("prompt")
             state["genie_conversation_id"] = result.get('conversation_id')
             state["sql"] = result.get('sql')
             
