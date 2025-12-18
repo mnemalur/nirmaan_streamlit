@@ -804,6 +804,7 @@ def render_chat_page():
     if genie_result:
         st.markdown("### Results from Genie (Text-to-SQL)")
         sql = genie_result.get("sql")
+        data = genie_result.get("data", [])
         row_count = genie_result.get("row_count", 0)
         exec_time = genie_result.get("execution_time")
 
@@ -811,11 +812,44 @@ def render_chat_page():
             st.subheader("Generated SQL")
             st.code(sql, language="sql")
 
+        # Display row count
         if row_count is not None:
             st.info(f"Genie reports {row_count} row(s) returned for this cohort query.")
+        elif data:
+            st.info(f"Genie returned {len(data)} row(s) for this cohort query.")
 
+        # Display execution time
         if exec_time is not None:
             st.caption(f"Query execution time (as reported by Genie): {exec_time}")
+
+        # Display the actual data if available
+        if data and len(data) > 0:
+            st.subheader("Query Results")
+            try:
+                # Convert data to DataFrame for better display
+                import pandas as pd
+                df = pd.DataFrame(data)
+                
+                # Show data in an expander if there are many rows
+                if len(df) > 50:
+                    st.info(f"Showing first 50 of {len(df)} rows. Use the expander below to see all data.")
+                    with st.expander(f"View all {len(df)} rows", expanded=False):
+                        st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df.head(50), use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                # Show summary statistics if numeric columns exist
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    with st.expander("Summary Statistics", expanded=False):
+                        st.dataframe(df[numeric_cols].describe(), use_container_width=True)
+            except Exception as e:
+                # If DataFrame conversion fails, show raw data
+                logger.warning(f"Could not convert Genie data to DataFrame: {e}")
+                st.json(data)
+        elif row_count and row_count > 0:
+            st.warning("Genie reported rows were returned, but data is not available. The SQL query may have executed but data extraction failed.")
 
 
 def process_query(query: str):

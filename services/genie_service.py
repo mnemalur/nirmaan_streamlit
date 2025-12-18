@@ -134,13 +134,36 @@ class GenieService:
                 "Please ensure you're using a compatible version of the Databricks SDK."
             )
         
+        # Call start_conversation - catch only API call errors, not parsing errors
         try:
             logger.info("Using start_conversation (Genie 2.0 API) to create new conversation")
             response = self.w.genie.start_conversation(
                 space_id=self.space_id,
                 content=nl_query,
             )
+            logger.info(f"start_conversation succeeded. Response type: {type(response)}")
+        except Exception as e:
+            # Only catch errors from the actual API call
+            error_msg = f"Failed to call Genie start_conversation: {str(e)}"
+            logger.error(error_msg, exc_info=True)
             
+            # Check if it's an authentication/permission error
+            if "does not own" in str(e).lower() or "permission" in str(e).lower() or "unauthorized" in str(e).lower():
+                raise ValueError(
+                    f"Authentication or permission error: {error_msg}\n"
+                    f"Please verify:\n"
+                    f"1. Your DATABRICKS_TOKEN has access to the Genie space (space_id={self.space_id})\n"
+                    f"2. The GENIE_SPACE_ID is correct\n"
+                    f"3. Your user has permissions to create conversations in this space"
+                )
+            raise ValueError(f"Cannot start Genie conversation. {error_msg}")
+        
+        # Parse response - handle errors gracefully, don't fail the whole operation
+        conversation_id = None
+        message_id = None
+        message = None
+        
+        try:
             # Debug: Log the response structure to understand what we're getting
             logger.info(f"Response type: {type(response)}")
             logger.info(f"Response attributes: {[a for a in dir(response) if not a.startswith('_')]}")
@@ -162,22 +185,28 @@ class GenieService:
             
             # Try alternative response structures
             if not conversation_id:
-                if hasattr(response, "conversation"):
-                    conv_obj = response.conversation
-                    conversation_id = getattr(conv_obj, "id", None) or getattr(conv_obj, "conversation_id", None)
-                    logger.info(f"Found conversation_id from response.conversation: {conversation_id}")
+                try:
+                    if hasattr(response, "conversation"):
+                        conv_obj = response.conversation
+                        conversation_id = getattr(conv_obj, "id", None) or getattr(conv_obj, "conversation_id", None)
+                        logger.info(f"Found conversation_id from response.conversation: {conversation_id}")
+                except Exception as e:
+                    logger.debug(f"Error accessing response.conversation: {e}")
             
             if not message_id:
-                if hasattr(response, "message"):
-                    msg_obj = response.message
-                    message_id = getattr(msg_obj, "id", None)
-                    if not conversation_id:
-                        conversation_id = getattr(msg_obj, "conversation_id", None)
-                    logger.info(f"Found message_id from response.message: {message_id}")
-                elif hasattr(response, "id") and not conversation_id:
-                    # If we don't have conversation_id yet, response.id might be it
-                    conversation_id = response.id
-                    logger.info(f"Using response.id as conversation_id: {conversation_id}")
+                try:
+                    if hasattr(response, "message"):
+                        msg_obj = response.message
+                        message_id = getattr(msg_obj, "id", None)
+                        if not conversation_id:
+                            conversation_id = getattr(msg_obj, "conversation_id", None)
+                        logger.info(f"Found message_id from response.message: {message_id}")
+                    elif hasattr(response, "id") and not conversation_id:
+                        # If we don't have conversation_id yet, response.id might be it
+                        conversation_id = response.id
+                        logger.info(f"Using response.id as conversation_id: {conversation_id}")
+                except Exception as e:
+                    logger.debug(f"Error accessing response.message or response.id: {e}")
             
             # Try to get values from response as dict if available
             try:
@@ -196,14 +225,9 @@ class GenieService:
             logger.info(f"Final extraction - conversation_id: {conversation_id}, message_id: {message_id}")
             
             # Get the message object for polling
-            # The response might already contain the message, or we need to fetch it
-            message = None
-            
             # Check if response has a message attribute that's not None/empty
-            has_message_attr = hasattr(response, 'message')
-            message_from_response = None
-            if has_message_attr:
-                try:
+            try:
+                if hasattr(response, 'message'):
                     message_from_response = getattr(response, 'message', None)
                     # Check if it's not None and has some content
                     if message_from_response is not None:
@@ -214,8 +238,8 @@ class GenieService:
                         elif hasattr(message_from_response, 'id') or hasattr(message_from_response, 'status'):
                             message = message_from_response
                             logger.info("Using response.message for polling (has id or status)")
-                except Exception as e:
-                    logger.debug(f"Error accessing response.message: {e}")
+            except Exception as e:
+                logger.debug(f"Error accessing response.message: {e}")
             
             # If we don't have a message yet, try fetching it
             if not message and conversation_id and message_id:
@@ -242,48 +266,37 @@ class GenieService:
                     # Try to use response anyway - polling will handle it
                     message = response
                     logger.warning("Using response directly as message object (fallback - may not work)")
-                
         except Exception as e:
-            error_msg = f"Failed to start Genie conversation: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            
-            # Include full traceback for debugging
-            import traceback
-            full_trace = traceback.format_exc()
-            logger.error(f"Full traceback:\n{full_trace}")
-            
-            # Check if it's an authentication/permission error
-            if "does not own" in str(e).lower() or "permission" in str(e).lower() or "unauthorized" in str(e).lower():
-                raise ValueError(
-                    f"Authentication or permission error: {error_msg}\n"
-                    f"Please verify:\n"
-                    f"1. Your DATABRICKS_TOKEN has access to the Genie space (space_id={self.space_id})\n"
-                    f"2. The GENIE_SPACE_ID is correct\n"
-                    f"3. Your user has permissions to create conversations in this space"
-                )
-            raise ValueError(f"Cannot start Genie conversation. {error_msg}")
+            # Parsing errors shouldn't fail the whole operation - log and continue
+            logger.warning(f"Error parsing Genie response structure: {e}. Will attempt to proceed with available data.")
+            # Use response as message if we don't have one
+            if not message:
+                message = response
 
+        # Validate we have what we need - but be lenient, we can try to get IDs during polling
         if not conversation_id:
-            # Provide detailed error with response structure info
-            response_info = f"Response type: {type(response)}, attributes: {[a for a in dir(response) if not a.startswith('_')]}"
+            logger.warning(
+                f"Could not determine conversation_id from Genie start_conversation response. "
+                f"Response type: {type(response)}, attributes: {[a for a in dir(response) if not a.startswith('_')]}. "
+                f"Will attempt to extract during polling."
+            )
+            # Try one more time to get conversation_id from response
             try:
                 if hasattr(response, '__dict__'):
-                    response_info += f", __dict__: {response.__dict__}"
-                if hasattr(response, 'as_dict'):
-                    response_info += f", as_dict: {response.as_dict()}"
+                    response_info = response.__dict__
+                    if 'conversation_id' in response_info:
+                        conversation_id = response_info['conversation_id']
+                    elif 'id' in response_info:
+                        conversation_id = response_info['id']
             except:
                 pass
-            raise ValueError(
-                f"Could not determine conversation_id from Genie start_conversation response. "
-                f"{response_info}"
-            )
         
         if not message:
-            raise ValueError(
+            logger.warning(
                 f"Could not get message object from Genie start_conversation response. "
-                f"conversation_id={conversation_id}, message_id={message_id}. "
-                f"Response type: {type(response)}, has 'message' attr: {hasattr(response, 'message')}"
+                f"Using response directly. conversation_id={conversation_id}, message_id={message_id}"
             )
+            message = response  # Use response as message - polling will handle it
         
         # Validate message and extract message_id
         logger.info(f"Message object obtained: type={type(message)}")
@@ -312,6 +325,37 @@ class GenieService:
             )
             # Set a placeholder - polling will need to handle this
             message_id = "unknown"
+        
+        # Final validation - we need conversation_id to poll
+        if not conversation_id:
+            # Try one last desperate attempt - maybe response itself has it nested somewhere
+            response_info = f"Response type: {type(response)}"
+            try:
+                if hasattr(response, '__dict__'):
+                    response_info += f", __dict__ keys: {list(response.__dict__.keys())}"
+                    # Check if any value in __dict__ might be a conversation_id
+                    for key, value in response.__dict__.items():
+                        if 'conversation' in key.lower() and value:
+                            try:
+                                if hasattr(value, 'id'):
+                                    conversation_id = value.id
+                                    logger.info(f"Found conversation_id from {key}.id: {conversation_id}")
+                                    break
+                            except:
+                                pass
+                if hasattr(response, 'as_dict'):
+                    resp_dict = response.as_dict()
+                    response_info += f", as_dict keys: {list(resp_dict.keys())}"
+            except Exception as e:
+                logger.debug(f"Final attempt to find conversation_id failed: {e}")
+            
+            if not conversation_id:
+                # This is a real problem - we can't poll without conversation_id
+                raise ValueError(
+                    f"Could not determine conversation_id from Genie start_conversation response. "
+                    f"This is required for polling. {response_info}. "
+                    f"Please check the logs for the full response structure, or contact support."
+                )
         
         logger.info(f"Successfully started Genie conversation: {conversation_id}, message_id: {message_id}")
 
@@ -574,21 +618,44 @@ class GenieService:
                 if result['sql']:
                     logger.info(f"Extracted SQL from message.content")
         
-        # Fallback: check message_dict directly
-        if not result['sql'] and message_dict:
-            logger.info("Checking message_dict for SQL...")
-            if 'sql' in message_dict:
-                result['sql'] = message_dict['sql']
-            elif 'query' in message_dict:
-                query_val = message_dict['query']
-                if isinstance(query_val, str):
-                    result['sql'] = query_val
-                elif isinstance(query_val, dict) and 'query' in query_val:
-                    result['sql'] = query_val['query']
+        # Fallback: check message_dict directly for SQL and data
+        if message_dict:
+            if not result['sql']:
+                logger.info("Checking message_dict for SQL...")
+                if 'sql' in message_dict:
+                    result['sql'] = message_dict['sql']
+                elif 'query' in message_dict:
+                    query_val = message_dict['query']
+                    if isinstance(query_val, str):
+                        result['sql'] = query_val
+                    elif isinstance(query_val, dict) and 'query' in query_val:
+                        result['sql'] = query_val['query']
+            
+            if not result['data']:
+                logger.info("Checking message_dict for data...")
+                # Try various keys where data might be stored
+                for key in ['data', 'data_array', 'rows', 'result', 'results']:
+                    if key in message_dict and message_dict[key]:
+                        data_val = message_dict[key]
+                        if isinstance(data_val, list):
+                            result['data'] = data_val
+                            result['row_count'] = len(data_val)
+                            logger.info(f"Extracted {result['row_count']} rows from message_dict['{key}']")
+                            break
+                        elif isinstance(data_val, dict):
+                            # Check nested structures
+                            for nested_key in ['data', 'data_array', 'rows']:
+                                if nested_key in data_val and isinstance(data_val[nested_key], list):
+                                    result['data'] = data_val[nested_key]
+                                    result['row_count'] = len(result['data'])
+                                    logger.info(f"Extracted {result['row_count']} rows from message_dict['{key}']['{nested_key}']")
+                                    break
+                            if result['data']:
+                                break
         
         # Log final result
         logger.info(f"Extraction complete - SQL: {'Found' if result['sql'] else 'Not found'}, "
-                   f"Rows: {result['row_count']}, Execution time: {result['execution_time']}")
+                   f"Data rows: {len(result['data'])}, Row count: {result['row_count']}, Execution time: {result['execution_time']}")
         
         if not result['sql']:
             logger.warning("Could not extract SQL from Genie message. Message structure may be unexpected.")
