@@ -49,7 +49,7 @@ class GenieService:
             token=config.token
         )
         self.space_id = config.space_id
-        self.max_poll_attempts = 120  # 120 attempts * 2 seconds = 4 minutes max (Genie can take time)
+        self.max_poll_attempts = 150  # 150 attempts * 2 seconds = 5 minutes max (Genie can take time)
         self.poll_interval = 2  # seconds
     
     def check_genie_health(self) -> tuple[bool, str]:
@@ -479,7 +479,54 @@ class GenieService:
                 status_str = str(status).upper() if status else ""
                 if status == MessageStatus.COMPLETED or status_str == "COMPLETED":
                     logger.info("Genie query completed successfully")
-                    return self._extract_result(message)
+                    result = self._extract_result(message)
+                    
+                    # If we have SQL but no data, wait a bit more - data might still be loading
+                    if result.get('sql') and not result.get('data'):
+                        logger.info("SQL found but no data yet. Waiting a bit more for data to load...")
+                        # Wait a few more seconds and check again
+                        time.sleep(3)
+                        try:
+                            message = self.w.genie.get_message(
+                                space_id=self.space_id,
+                                conversation_id=conversation_id,
+                                message_id=message_id
+                            )
+                            result = self._extract_result(message)
+                            logger.info(f"After waiting, found {len(result.get('data', []))} rows")
+                        except Exception as e:
+                            logger.debug(f"Could not re-fetch message after wait: {e}")
+                    
+                    # If still no data, check for follow-up messages that might contain results
+                    if result.get('sql') and not result.get('data'):
+                        logger.info("Still no data in completed message. Checking for follow-up messages...")
+                        try:
+                            if hasattr(self.w.genie, 'list_messages'):
+                                messages = self.w.genie.list_messages(
+                                    space_id=self.space_id,
+                                    conversation_id=conversation_id
+                                )
+                                if messages:
+                                    message_list = list(messages) if hasattr(messages, '__iter__') else [messages]
+                                    # Check messages after the current one (they might contain data)
+                                    for msg in message_list:
+                                        msg_id = getattr(msg, 'id', None)
+                                        if msg_id and msg_id != message_id:
+                                            logger.info(f"Checking follow-up message {msg_id} for data...")
+                                            try:
+                                                follow_up_result = self._extract_result(msg)
+                                                if follow_up_result.get('data'):
+                                                    logger.info(f"Found data in follow-up message: {len(follow_up_result['data'])} rows")
+                                                    # Merge results: keep SQL from first, data from follow-up
+                                                    result['data'] = follow_up_result['data']
+                                                    result['row_count'] = len(result['data'])
+                                                    break
+                                            except Exception as e:
+                                                logger.debug(f"Could not extract from follow-up message: {e}")
+                        except Exception as e:
+                            logger.debug(f"Could not list messages to check for data: {e}")
+                    
+                    return result
                 
                 # Check if failed
                 elif status == MessageStatus.FAILED or status_str == "FAILED":
@@ -496,8 +543,16 @@ class GenieService:
                 elif status in [MessageStatus.EXECUTING_QUERY, MessageStatus.FETCHING_METADATA, 
                                MessageStatus.QUERYING, MessageStatus.RUNNING] or \
                      status_str in ["EXECUTING_QUERY", "FETCHING_METADATA", "QUERYING", "RUNNING", "PROCESSING"]:
-                    if attempt % 5 == 0:  # Log every 5th attempt to reduce log noise
-                        logger.info(f"Genie still processing (status: {status}), waiting {self.poll_interval}s... ({attempt + 1}/{self.max_poll_attempts})")
+                    # Log progress more frequently as we approach timeout
+                    elapsed_time = (attempt + 1) * self.poll_interval
+                    remaining_time = (self.max_poll_attempts - attempt - 1) * self.poll_interval
+                    
+                    if attempt % 10 == 0 or remaining_time <= 60:  # Log every 10 attempts, or every attempt in last minute
+                        logger.info(
+                            f"Genie still processing (status: {status}). "
+                            f"Elapsed: {elapsed_time}s, Remaining: ~{remaining_time}s "
+                            f"({attempt + 1}/{self.max_poll_attempts} attempts)"
+                        )
                     time.sleep(self.poll_interval)
                     continue
                 
@@ -523,13 +578,21 @@ class GenieService:
                 if "failed" in error_str.lower() or "cancelled" in error_str.lower():
                     raise
                     
-                logger.error(f"Error polling Genie (attempt {attempt + 1}): {error_str}")
+                logger.error(f"Error polling Genie (attempt {attempt + 1}/{self.max_poll_attempts}): {error_str}")
                 if attempt == self.max_poll_attempts - 1:
-                    raise Exception(f"Genie query timeout after {self.max_poll_attempts * self.poll_interval}s. Last error: {error_str}")
+                    total_time = self.max_poll_attempts * self.poll_interval
+                    raise Exception(
+                        f"Genie query timeout after {total_time} seconds ({self.max_poll_attempts} attempts). "
+                        f"Genie may still be processing - please check Genie logs or try again. Last error: {error_str}"
+                    )
                 time.sleep(self.poll_interval)
         
-        # Timeout
-        raise Exception(f"Genie query timeout after {self.max_poll_attempts * self.poll_interval} seconds ({self.max_poll_attempts} attempts)")
+        # Timeout - this should rarely be reached as we check attempt count above
+        total_time = self.max_poll_attempts * self.poll_interval
+        raise Exception(
+            f"Genie query timeout after {total_time} seconds ({self.max_poll_attempts} attempts). "
+            f"Genie may still be processing - please check Genie logs or try again."
+        )
     
     def _extract_result(self, message) -> Dict:
         """Extract SQL and results from completed Genie message"""
@@ -563,9 +626,34 @@ class GenieService:
             for idx, attachment in enumerate(message.attachments):
                 logger.info(f"Attachment {idx} type: {type(attachment)}, attributes: {[a for a in dir(attachment) if not a.startswith('_')]}")
                 
+                # Check if attachment itself has data
+                if not result.get('data'):
+                    logger.info(f"Checking attachment {idx} directly for data...")
+                    for key in ['data', 'data_array', 'rows', 'result']:
+                        if hasattr(attachment, key):
+                            data_val = getattr(attachment, key)
+                            if data_val:
+                                if isinstance(data_val, list) or (hasattr(data_val, '__iter__') and not isinstance(data_val, str)):
+                                    result['data'] = list(data_val) if hasattr(data_val, '__iter__') else [data_val]
+                                    result['row_count'] = len(result['data'])
+                                    logger.info(f"Extracted {result['row_count']} rows from attachment.{key}")
+                                    break
+                
                 if hasattr(attachment, 'query') and attachment.query:
                     query = attachment.query
-                    logger.info(f"Found query in attachment {idx}")
+                    logger.info(f"Found query in attachment {idx}, type: {type(query)}, attributes: {[a for a in dir(query) if not a.startswith('_')]}")
+                    
+                    # Try to get query as dict for easier inspection
+                    query_dict = None
+                    try:
+                        if hasattr(query, 'as_dict'):
+                            query_dict = query.as_dict()
+                            logger.info(f"Query as_dict keys: {list(query_dict.keys())}")
+                        elif hasattr(query, '__dict__'):
+                            query_dict = query.__dict__
+                            logger.info(f"Query __dict__ keys: {list(query_dict.keys())}")
+                    except Exception as e:
+                        logger.debug(f"Could not convert query to dict: {e}")
                     
                     # Get SQL text
                     if hasattr(query, 'query') and query.query:
@@ -580,6 +668,9 @@ class GenieService:
                         elif hasattr(query, 'text'):
                             result['sql'] = query.text
                             logger.info(f"Extracted SQL from query.text")
+                        elif query_dict and 'query' in query_dict:
+                            result['sql'] = query_dict['query']
+                            logger.info(f"Extracted SQL from query_dict['query']")
                     
                     # Get execution time
                     if hasattr(query, 'duration'):
@@ -587,24 +678,94 @@ class GenieService:
                         logger.info(f"Extracted execution_time: {result['execution_time']}")
                     elif hasattr(query, 'execution_time'):
                         result['execution_time'] = query.execution_time
+                    elif query_dict and 'duration' in query_dict:
+                        result['execution_time'] = query_dict['duration']
+                    
+                    # Check if query itself has data (not just query.result)
+                    if not result.get('data'):
+                        logger.info("Checking query object directly for data...")
+                        for key in ['data', 'data_array', 'rows', 'result_data']:
+                            if hasattr(query, key):
+                                data_val = getattr(query, key)
+                                if data_val:
+                                    if isinstance(data_val, list) or (hasattr(data_val, '__iter__') and not isinstance(data_val, str)):
+                                        result['data'] = list(data_val) if hasattr(data_val, '__iter__') else [data_val]
+                                        result['row_count'] = len(result['data'])
+                                        logger.info(f"Extracted {result['row_count']} rows from query.{key}")
+                                        break
+                        # Also check query_dict
+                        if not result.get('data') and query_dict:
+                            for key in ['data', 'data_array', 'rows', 'result_data']:
+                                if key in query_dict and query_dict[key]:
+                                    data_val = query_dict[key]
+                                    if isinstance(data_val, list):
+                                        result['data'] = data_val
+                                        result['row_count'] = len(data_val)
+                                        logger.info(f"Extracted {result['row_count']} rows from query_dict['{key}']")
+                                        break
                     
                     # Get result data
                     if hasattr(query, 'result') and query.result:
                         result_obj = query.result
-                        logger.info(f"Found result object, type: {type(result_obj)}")
+                        logger.info(f"Found result object, type: {type(result_obj)}, attributes: {[a for a in dir(result_obj) if not a.startswith('_')]}")
                         
+                        # Try to get as dict for easier inspection
+                        result_dict = None
+                        try:
+                            if hasattr(result_obj, 'as_dict'):
+                                result_dict = result_obj.as_dict()
+                                logger.info(f"Result as_dict keys: {list(result_dict.keys())}")
+                            elif hasattr(result_obj, '__dict__'):
+                                result_dict = result_obj.__dict__
+                                logger.info(f"Result __dict__ keys: {list(result_dict.keys())}")
+                        except Exception as e:
+                            logger.debug(f"Could not convert result to dict: {e}")
+                        
+                        # Try multiple ways to get data
+                        data_found = False
                         if hasattr(result_obj, 'data_array'):
-                            result['data'] = result_obj.data_array or []
-                            result['row_count'] = len(result['data'])
-                            logger.info(f"Extracted {result['row_count']} rows from data_array")
+                            data_val = result_obj.data_array
+                            if data_val:
+                                result['data'] = list(data_val) if hasattr(data_val, '__iter__') else [data_val]
+                                result['row_count'] = len(result['data'])
+                                logger.info(f"Extracted {result['row_count']} rows from data_array")
+                                data_found = True
                         elif hasattr(result_obj, 'data'):
-                            result['data'] = result_obj.data or []
-                            result['row_count'] = len(result['data'])
-                            logger.info(f"Extracted {result['row_count']} rows from data")
+                            data_val = result_obj.data
+                            if data_val:
+                                result['data'] = list(data_val) if hasattr(data_val, '__iter__') else [data_val]
+                                result['row_count'] = len(result['data'])
+                                logger.info(f"Extracted {result['row_count']} rows from data")
+                                data_found = True
                         elif hasattr(result_obj, 'rows'):
-                            result['data'] = result_obj.rows or []
-                            result['row_count'] = len(result['data'])
-                            logger.info(f"Extracted {result['row_count']} rows from rows")
+                            data_val = result_obj.rows
+                            if data_val:
+                                result['data'] = list(data_val) if hasattr(data_val, '__iter__') else [data_val]
+                                result['row_count'] = len(result['data'])
+                                logger.info(f"Extracted {result['row_count']} rows from rows")
+                                data_found = True
+                        
+                        # Check result_dict for data
+                        if not data_found and result_dict:
+                            logger.info("Checking result_dict for data...")
+                            for key in ['data', 'data_array', 'rows', 'values', 'records']:
+                                if key in result_dict and result_dict[key]:
+                                    data_val = result_dict[key]
+                                    if isinstance(data_val, list):
+                                        result['data'] = data_val
+                                        result['row_count'] = len(data_val)
+                                        logger.info(f"Extracted {result['row_count']} rows from result_dict['{key}']")
+                                        data_found = True
+                                        break
+                                    elif hasattr(data_val, '__iter__') and not isinstance(data_val, str):
+                                        result['data'] = list(data_val)
+                                        result['row_count'] = len(result['data'])
+                                        logger.info(f"Extracted {result['row_count']} rows from result_dict['{key}'] (converted from iterable)")
+                                        data_found = True
+                                        break
+                        
+                        if not data_found:
+                            logger.warning(f"No data found in result object. Result object structure: {result_dict if result_dict else 'could not inspect'}")
         
         # Fallback: check if SQL is in message text/content
         if not result['sql']:
