@@ -685,11 +685,12 @@ def render_chat_page():
 
         st.markdown("### How should I use these codes?")
         overall_choice = st.radio(
-            "",
+            "Code selection method",
             ["Use all suggested codes (recommended)", "Customize codes per condition"],
             index=0,
             horizontal=True,
             key="code_selection_choice",
+            label_visibility="collapsed",  # Hide label visually but keep for accessibility
         )
 
         selected_codes: list[dict] = []

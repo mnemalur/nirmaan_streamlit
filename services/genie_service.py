@@ -198,25 +198,50 @@ class GenieService:
             # Get the message object for polling
             # The response might already contain the message, or we need to fetch it
             message = None
-            if hasattr(response, 'message') and response.message:
-                message = response.message
-                logger.info("Using response.message for polling")
-            elif conversation_id and message_id:
-                # Fetch the message separately for polling
+            
+            # Check if response has a message attribute that's not None/empty
+            has_message_attr = hasattr(response, 'message')
+            message_from_response = None
+            if has_message_attr:
                 try:
+                    message_from_response = getattr(response, 'message', None)
+                    # Check if it's not None and has some content
+                    if message_from_response is not None:
+                        # Check if it's not an empty object
+                        if hasattr(message_from_response, '__dict__') and message_from_response.__dict__:
+                            message = message_from_response
+                            logger.info("Using response.message for polling")
+                        elif hasattr(message_from_response, 'id') or hasattr(message_from_response, 'status'):
+                            message = message_from_response
+                            logger.info("Using response.message for polling (has id or status)")
+                except Exception as e:
+                    logger.debug(f"Error accessing response.message: {e}")
+            
+            # If we don't have a message yet, try fetching it
+            if not message and conversation_id and message_id:
+                try:
+                    logger.info(f"Fetching message separately: conversation_id={conversation_id}, message_id={message_id}")
                     message = self.w.genie.get_message(
                         space_id=self.space_id,
                         conversation_id=conversation_id,
                         message_id=message_id
                     )
-                    logger.info("Fetched message separately for polling")
+                    logger.info("Successfully fetched message separately for polling")
                 except Exception as e:
                     logger.warning(f"Could not fetch message separately: {e}. Will try using response directly.")
+                    # Fallback: use response as message
                     message = response
-            else:
-                # Fallback: use response as message if it has the necessary attributes
-                message = response
-                logger.info("Using response directly as message object")
+                    logger.info("Using response directly as message object (fallback)")
+            elif not message:
+                # Last resort: check if response itself has message-like attributes
+                # (start_conversation might return the message directly)
+                if hasattr(response, 'status') or hasattr(response, 'id'):
+                    message = response
+                    logger.info("Using response directly as message object (has status or id)")
+                else:
+                    # Try to use response anyway - polling will handle it
+                    message = response
+                    logger.warning("Using response directly as message object (fallback - may not work)")
                 
         except Exception as e:
             error_msg = f"Failed to start Genie conversation: {str(e)}"
@@ -256,24 +281,39 @@ class GenieService:
         if not message:
             raise ValueError(
                 f"Could not get message object from Genie start_conversation response. "
-                f"conversation_id={conversation_id}, message_id={message_id}"
+                f"conversation_id={conversation_id}, message_id={message_id}. "
+                f"Response type: {type(response)}, has 'message' attr: {hasattr(response, 'message')}"
             )
         
-        message_id = getattr(message, "id", None)
-        if not message_id:
+        # Validate message and extract message_id
+        logger.info(f"Message object obtained: type={type(message)}")
+        
+        # Try to get message_id from the message object
+        message_id_from_message = getattr(message, "id", None)
+        if not message_id_from_message:
             # Try alternative ways to get message_id
             if hasattr(message, "message_id"):
-                message_id = message.message_id
+                message_id_from_message = message.message_id
             elif hasattr(message, "__dict__") and "id" in message.__dict__:
-                message_id = message.__dict__["id"]
-            
-            if not message_id:
-                raise ValueError(
-                    f"Could not determine message_id from Genie response. "
-                    f"Message type: {type(message)}, attributes: {[a for a in dir(message) if not a.startswith('_')]}"
-                )
+                message_id_from_message = message.__dict__["id"]
         
-        logger.info(f"Successfully started Genie conversation: {conversation_id}, message: {message_id}")
+        # Use message_id from message if we got it, otherwise use the one we extracted earlier
+        if message_id_from_message:
+            message_id = message_id_from_message
+            logger.info(f"Using message_id from message object: {message_id}")
+        elif message_id:
+            logger.info(f"Using previously extracted message_id: {message_id}")
+        else:
+            # If we still don't have message_id, log warning but continue - polling might work without it
+            logger.warning(
+                f"Could not determine message_id from Genie message. "
+                f"Message type: {type(message)}, attributes: {[a for a in dir(message) if not a.startswith('_')]}. "
+                f"Will attempt polling with conversation_id only."
+            )
+            # Set a placeholder - polling will need to handle this
+            message_id = "unknown"
+        
+        logger.info(f"Successfully started Genie conversation: {conversation_id}, message_id: {message_id}")
 
         # Poll until the message completes
         # Use the message_id we extracted, not message.id (which might not exist)
@@ -336,6 +376,31 @@ class GenieService:
         """
         
         logger.info(f"Starting to poll for completion: conversation_id={conversation_id}, message_id={message_id}")
+        
+        # If message_id is unknown, try to get it from the conversation
+        if message_id == "unknown" or not message_id:
+            logger.info("message_id not available, attempting to list messages in conversation...")
+            try:
+                if hasattr(self.w.genie, 'list_messages'):
+                    messages = self.w.genie.list_messages(
+                        space_id=self.space_id,
+                        conversation_id=conversation_id
+                    )
+                    # Get the most recent message
+                    if messages:
+                        message_list = list(messages) if hasattr(messages, '__iter__') else [messages]
+                        if message_list:
+                            latest_message = message_list[-1]  # Most recent
+                            message_id = getattr(latest_message, 'id', None) or getattr(latest_message, 'message_id', None)
+                            logger.info(f"Found message_id from conversation messages: {message_id}")
+            except Exception as e:
+                logger.warning(f"Could not list messages: {e}")
+        
+        if not message_id or message_id == "unknown":
+            raise ValueError(
+                f"Cannot poll Genie conversation: message_id is required but not available. "
+                f"conversation_id={conversation_id}"
+            )
         
         for attempt in range(self.max_poll_attempts):
             try:
