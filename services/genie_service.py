@@ -52,6 +52,61 @@ class GenieService:
         self.max_poll_attempts = 60  # 60 attempts * 2 seconds = 2 minutes max
         self.poll_interval = 2  # seconds
     
+    def check_genie_health(self) -> tuple[bool, str]:
+        """
+        Check if Genie service is active and accessible.
+        
+        Returns:
+            (success: bool, message: str)
+        """
+        try:
+            # 1. Verify authentication
+            try:
+                current_user = self.w.current_user.me()
+                user_name = getattr(current_user, 'user_name', 'unknown')
+                logger.info(f"Authentication verified for user: {user_name}")
+            except Exception as e:
+                return False, f"Authentication failed: {str(e)}. Please check your DATABRICKS_TOKEN."
+            
+            # 2. Verify Genie API is available
+            if not hasattr(self.w, 'genie'):
+                return False, "Genie API is not available in this Databricks SDK version."
+            
+            if not hasattr(self.w.genie, 'start_conversation'):
+                return False, "Genie 2.0 API (start_conversation) is not available. Please update your Databricks SDK."
+            
+            # 3. Verify space_id is configured
+            if not self.space_id:
+                return False, "GENIE_SPACE_ID is not configured. Please set it in your environment or configuration."
+            
+            # 4. Try to verify access to the space (by attempting to list conversations or checking space)
+            # Note: Some SDKs may have a list_spaces or get_space method
+            try:
+                # Try to access space info if available
+                if hasattr(self.w.genie, 'get_space'):
+                    try:
+                        space = self.w.genie.get_space(space_id=self.space_id)
+                        logger.info(f"Verified access to Genie space: {self.space_id}")
+                    except Exception as e:
+                        logger.warning(f"Could not verify space access directly: {e}. Continuing anyway...")
+                elif hasattr(self.w.genie, 'list_spaces'):
+                    # Try to list spaces to verify API access
+                    try:
+                        spaces = self.w.genie.list_spaces()
+                        logger.info(f"Genie API is accessible. Found {len(list(spaces)) if spaces else 0} space(s).")
+                    except Exception as e:
+                        logger.warning(f"Could not list spaces: {e}. Continuing anyway...")
+            except Exception as e:
+                logger.warning(f"Space verification check failed: {e}. Continuing anyway...")
+            
+            # 5. All checks passed
+            return True, f"Genie service is active and accessible. Space ID: {self.space_id}"
+            
+        except Exception as e:
+            error_msg = f"Genie health check failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return False, error_msg
+    
     def create_cohort_query(self, criteria: Dict) -> Dict:
         """Create a new Genie conversation for a cohort query and poll until complete.
 
@@ -61,17 +116,12 @@ class GenieService:
         COMPLETED or times out.
         """
         
-        # Validate configuration before proceeding
-        if not self.space_id:
-            raise ValueError("GENIE_SPACE_ID is not configured. Please set it in your environment or configuration.")
-        
-        # Verify authentication by checking if we can access the workspace
-        try:
-            # Simple check: try to get current user info
-            current_user = self.w.current_user.me()
-            logger.info(f"Authenticated as: {getattr(current_user, 'user_name', 'unknown')}")
-        except Exception as e:
-            logger.warning(f"Could not verify authentication: {e}. Continuing anyway...")
+        # Health check: Ensure Genie is active before attempting to use it
+        logger.info("Checking Genie service health before starting conversation...")
+        is_healthy, health_message = self.check_genie_health()
+        if not is_healthy:
+            raise ValueError(f"Genie service is not available: {health_message}")
+        logger.info(f"Genie health check passed: {health_message}")
         
         # Build natural language query / prompt for Genie
         nl_query = self._build_nl_query(criteria)

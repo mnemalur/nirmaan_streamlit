@@ -196,6 +196,39 @@ def run_databricks_health_check():
         return False, str(e)
 
 
+def run_genie_health_check():
+    """Check if Genie service is active and accessible."""
+    try:
+        # Reload config to pick up any values saved via the UI/config form
+        import importlib
+        import config as config_module
+        importlib.reload(config_module)
+        db_config = config_module.config
+        
+        # Ensure required configuration is present
+        missing = []
+        if not db_config.host:
+            missing.append("DATABRICKS_HOST")
+        if not db_config.token:
+            missing.append("DATABRICKS_TOKEN")
+        if not db_config.space_id:
+            missing.append("GENIE_SPACE_ID")
+        
+        if missing:
+            return False, f"Missing required configuration: {', '.join(missing)}"
+        
+        # Create a temporary GenieService instance to check health
+        from services.genie_service import GenieService
+        genie_service = GenieService()
+        
+        # Run the health check
+        is_healthy, message = genie_service.check_genie_health()
+        return is_healthy, message
+    except Exception as e:
+        logger.error(f"Genie health check failed: {e}", exc_info=True)
+        return False, str(e)
+
+
 def refine_criteria_with_codes():
     """Build a refined, natural-language criteria description using selected codes."""
     analysis = st.session_state.get("criteria_analysis") or {}
@@ -487,15 +520,29 @@ def render_config_page():
                 else:
                     st.error("❌ Failed to initialize services. Please check your configuration.")
 
-    st.markdown("### Connection Health Check")
-    st.caption("Run a simple test query on your SQL Warehouse to validate connectivity.")
-    if st.button("Test Databricks connection", use_container_width=True):
-        with st.spinner("Running health check..."):
-            ok, info = run_databricks_health_check()
-        if ok:
-            st.success(f"✅ Databricks SQL Warehouse is reachable (SELECT 1 returned {info}).")
-        else:
-            st.error(f"❌ Databricks health check failed: {info}")
+    st.markdown("### Connection Health Checks")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.caption("Test SQL Warehouse connectivity")
+        if st.button("Test Databricks connection", use_container_width=True):
+            with st.spinner("Running health check..."):
+                ok, info = run_databricks_health_check()
+            if ok:
+                st.success(f"✅ Databricks SQL Warehouse is reachable (SELECT 1 returned {info}).")
+            else:
+                st.error(f"❌ Databricks health check failed: {info}")
+    
+    with col2:
+        st.caption("Test Genie service availability")
+        if st.button("Test Genie connection", use_container_width=True):
+            with st.spinner("Checking Genie service..."):
+                ok, info = run_genie_health_check()
+            if ok:
+                st.success(f"✅ Genie service is active: {info}")
+            else:
+                st.error(f"❌ Genie health check failed: {info}")
 
 
 def render_chat_page():
