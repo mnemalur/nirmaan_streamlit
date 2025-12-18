@@ -202,8 +202,14 @@ def refine_criteria_with_codes():
     selected_codes = st.session_state.get("selected_codes") or []
     original_text = st.session_state.get("criteria_text") or ""
 
-    if not selected_codes:
-        st.warning("No codes selected to refine the criteria.")
+    if not selected_codes or len(selected_codes) == 0:
+        error_msg = (
+            f"No codes selected to refine the criteria. "
+            f"Session state has {len(st.session_state.get('selected_codes', []))} codes. "
+            f"Please select codes using 'Use all suggested codes' or choose specific codes."
+        )
+        st.warning(error_msg)
+        logger.warning(error_msg)
         return ""
 
     summary = analysis.get("summary") or original_text
@@ -636,14 +642,25 @@ def render_chat_page():
             ["Use all suggested codes (recommended)", "Customize codes per condition"],
             index=0,
             horizontal=True,
+            key="code_selection_choice",
         )
 
         selected_codes: list[dict] = []
 
         if overall_choice.startswith("Use all"):
             # Simple path: take everything from all conditions, no extra UI.
-            for cond_codes in grouped.values():
-                selected_codes.extend(cond_codes)
+            if not grouped:
+                st.warning("No codes were found to select. Please check your vector search results.")
+            else:
+                for cond_codes in grouped.values():
+                    if cond_codes:  # Only extend if there are actually codes
+                        selected_codes.extend(cond_codes)
+                # Immediately persist to session state so it's available even after reruns
+                if selected_codes:
+                    st.session_state.selected_codes = selected_codes
+                    logger.info(f"Selected {len(selected_codes)} codes via 'Use all' from {len(grouped)} condition groups")
+                else:
+                    logger.warning(f"'Use all' selected but no codes found in grouped dict. Grouped keys: {list(grouped.keys())}")
         else:
             st.markdown(
                 "You can fine-tune codes per condition below. By default, nothing is selected; "
@@ -674,11 +691,25 @@ def render_chat_page():
                     for label in selected_labels:
                         selected_codes.append(label_to_code[label])
 
+        # Always update session state with what we just computed
         st.session_state.selected_codes = selected_codes
 
-        if selected_codes:
+        # For the UI check, use session state (which persists) but also check local
+        # in case this is the first render after selection
+        final_selected = st.session_state.get("selected_codes") or selected_codes
+        
+        # Debug: show what we have (temporary, can remove later)
+        if not final_selected or len(final_selected) == 0:
+            with st.expander("🔍 Debug: Why no codes selected?", expanded=False):
+                st.write(f"Local selected_codes count: {len(selected_codes)}")
+                st.write(f"Session state selected_codes count: {len(st.session_state.get('selected_codes', []))}")
+                st.write(f"Overall choice: {overall_choice}")
+                st.write(f"Grouped conditions: {list(grouped.keys())}")
+                st.write(f"Total codes from vector search: {len(codes)}")
+        
+        if final_selected and len(final_selected) > 0:
             st.success(
-                f"I'll carry forward {len(selected_codes)} code(s) across "
+                f"I'll carry forward {len(final_selected)} code(s) across "
                 f"{len(grouped)} condition(s) when we move on to build the cohort definition "
                 "and, in the next milestone, search for patients."
             )
@@ -687,11 +718,17 @@ def render_chat_page():
                 refined_text = refine_criteria_with_codes()
                 if refined_text:
                     st.rerun()  # Rerun to show the refined criteria and Genie button below
-            else:
-                st.warning(
-                    "You haven't selected any codes yet. I won't be able to build a cohort "
-                    "until there is at least one code to represent the condition."
-                )
+        elif not codes or len(codes) == 0:
+            # Only show warning if there are no codes at all from vector search
+            st.warning(
+                "No codes were found from the vector search. Please check your criteria or try again."
+            )
+        else:
+            # Codes exist but none are selected
+            st.warning(
+                "You haven't selected any codes yet. Please choose 'Use all suggested codes' "
+                "or select specific codes in the expanders above."
+            )
 
     # Show refined criteria and offer to send to Genie (after user has refined)
     refined_text = st.session_state.get("refined_criteria_text")
