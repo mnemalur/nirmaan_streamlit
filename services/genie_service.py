@@ -65,17 +65,36 @@ class GenieService:
         nl_query = self._build_nl_query(criteria)
         logger.info(f"Sending cohort request to Genie: {nl_query}")
 
-        # Start a new Genie conversation by creating the first message without
-        # specifying a conversation_id.
+        # The Genie API requires conversation_id as a positional argument.
+        # For a new conversation, pass None and the API will create one.
+        # Try creating a conversation first if the method exists
+        conversation_id = None
+        try:
+            if hasattr(self.w.genie, 'create_conversation'):
+                conversation = self.w.genie.create_conversation(space_id=self.space_id)
+                conversation_id = getattr(conversation, "id", None) or getattr(conversation, "conversation_id", None)
+                logger.info(f"Created new Genie conversation: {conversation_id}")
+        except (AttributeError, Exception) as e:
+            logger.debug(f"create_conversation not available: {e}")
+
+        # Create the first message in the conversation
+        # conversation_id is a required positional argument - pass None for new conversations
+        # Method signature appears to be: create_message(space_id, conversation_id, content)
         message = self.w.genie.create_message(
-            space_id=self.space_id,
-            content=nl_query,
+            self.space_id,
+            conversation_id,  # None for new conversation, or ID if we created one
+            nl_query,
         )
 
-        conversation_id = getattr(message, "conversation_id", None)
+        # Extract conversation_id from response if we didn't have it
         if not conversation_id:
-            # Fallback: some SDK versions may expose conversation id differently
-            conversation_id = getattr(message, "id", None)
+            conversation_id = getattr(message, "conversation_id", None)
+            if not conversation_id:
+                conversation_id = getattr(message, "id", None)
+        
+        if not conversation_id:
+            raise ValueError("Could not determine conversation_id from Genie response")
+        
         logger.info(f"Started Genie conversation: {conversation_id}")
 
         # Poll until the message completes
