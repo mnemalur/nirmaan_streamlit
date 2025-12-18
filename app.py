@@ -345,7 +345,7 @@ def run_genie_for_refined_criteria():
     st.session_state.genie_error = None
 
     try:
-        # This will poll Genie until completion (can take up to 2 minutes)
+        # This will poll Genie until completion (can take up to 4 minutes)
         result = genie.create_cohort_query(genie_criteria)
         st.session_state.genie_result = result
         st.session_state.genie_conversation_id = result.get("conversation_id")
@@ -786,7 +786,7 @@ def render_chat_page():
         
         if st.session_state.get("genie_running"):
             # Actually call Genie now (this will poll and take time)
-            with st.spinner("Asking Genie to generate and run the cohort SQL... This may take up to 2 minutes."):
+            with st.spinner("Asking Genie to generate and run the cohort SQL... This may take up to 4 minutes."):
                 run_genie_for_refined_criteria()
                 st.session_state.genie_running = False
                 st.rerun()  # Rerun to show results or error

@@ -49,7 +49,7 @@ class GenieService:
             token=config.token
         )
         self.space_id = config.space_id
-        self.max_poll_attempts = 60  # 60 attempts * 2 seconds = 2 minutes max
+        self.max_poll_attempts = 120  # 120 attempts * 2 seconds = 4 minutes max (Genie can take time)
         self.poll_interval = 2  # seconds
     
     def check_genie_health(self) -> tuple[bool, str]:
@@ -141,16 +141,31 @@ class GenieService:
                 content=nl_query,
             )
             
+            # Debug: Log the response structure to understand what we're getting
+            logger.info(f"Response type: {type(response)}")
+            logger.info(f"Response attributes: {[a for a in dir(response) if not a.startswith('_')]}")
+            try:
+                if hasattr(response, '__dict__'):
+                    logger.info(f"Response __dict__ keys: {list(response.__dict__.keys())}")
+                if hasattr(response, 'as_dict'):
+                    resp_dict = response.as_dict()
+                    logger.info(f"Response as_dict keys: {list(resp_dict.keys())}")
+            except Exception as e:
+                logger.debug(f"Could not inspect response structure: {e}")
+            
             # Extract conversation_id and message_id from response
             # The response structure may vary, so try multiple attribute paths
             conversation_id = getattr(response, "conversation_id", None) or getattr(response, "id", None)
             message_id = getattr(response, "message_id", None)
+            
+            logger.info(f"Initial extraction - conversation_id: {conversation_id}, message_id: {message_id}")
             
             # Try alternative response structures
             if not conversation_id:
                 if hasattr(response, "conversation"):
                     conv_obj = response.conversation
                     conversation_id = getattr(conv_obj, "id", None) or getattr(conv_obj, "conversation_id", None)
+                    logger.info(f"Found conversation_id from response.conversation: {conversation_id}")
             
             if not message_id:
                 if hasattr(response, "message"):
@@ -158,29 +173,59 @@ class GenieService:
                     message_id = getattr(msg_obj, "id", None)
                     if not conversation_id:
                         conversation_id = getattr(msg_obj, "conversation_id", None)
-                elif hasattr(response, "id"):
-                    message_id = response.id
+                    logger.info(f"Found message_id from response.message: {message_id}")
+                elif hasattr(response, "id") and not conversation_id:
+                    # If we don't have conversation_id yet, response.id might be it
+                    conversation_id = response.id
+                    logger.info(f"Using response.id as conversation_id: {conversation_id}")
             
-            logger.info(f"Started new Genie conversation: {conversation_id}, message: {message_id}")
+            # Try to get values from response as dict if available
+            try:
+                if hasattr(response, 'as_dict'):
+                    resp_dict = response.as_dict()
+                    logger.info(f"Response as_dict: {resp_dict}")
+                    if not conversation_id and 'conversation_id' in resp_dict:
+                        conversation_id = resp_dict['conversation_id']
+                    if not message_id and 'message_id' in resp_dict:
+                        message_id = resp_dict['message_id']
+                    if not conversation_id and 'id' in resp_dict:
+                        conversation_id = resp_dict['id']
+            except Exception as e:
+                logger.debug(f"Could not convert response to dict: {e}")
+            
+            logger.info(f"Final extraction - conversation_id: {conversation_id}, message_id: {message_id}")
             
             # Get the message object for polling
             # The response might already contain the message, or we need to fetch it
+            message = None
             if hasattr(response, 'message') and response.message:
                 message = response.message
+                logger.info("Using response.message for polling")
             elif conversation_id and message_id:
                 # Fetch the message separately for polling
-                message = self.w.genie.get_message(
-                    space_id=self.space_id,
-                    conversation_id=conversation_id,
-                    message_id=message_id
-                )
+                try:
+                    message = self.w.genie.get_message(
+                        space_id=self.space_id,
+                        conversation_id=conversation_id,
+                        message_id=message_id
+                    )
+                    logger.info("Fetched message separately for polling")
+                except Exception as e:
+                    logger.warning(f"Could not fetch message separately: {e}. Will try using response directly.")
+                    message = response
             else:
                 # Fallback: use response as message if it has the necessary attributes
                 message = response
+                logger.info("Using response directly as message object")
                 
         except Exception as e:
             error_msg = f"Failed to start Genie conversation: {str(e)}"
             logger.error(error_msg, exc_info=True)
+            
+            # Include full traceback for debugging
+            import traceback
+            full_trace = traceback.format_exc()
+            logger.error(f"Full traceback:\n{full_trace}")
             
             # Check if it's an authentication/permission error
             if "does not own" in str(e).lower() or "permission" in str(e).lower() or "unauthorized" in str(e).lower():
@@ -194,19 +239,45 @@ class GenieService:
             raise ValueError(f"Cannot start Genie conversation. {error_msg}")
 
         if not conversation_id:
-            raise ValueError("Could not determine conversation_id from Genie start_conversation response")
+            # Provide detailed error with response structure info
+            response_info = f"Response type: {type(response)}, attributes: {[a for a in dir(response) if not a.startswith('_')]}"
+            try:
+                if hasattr(response, '__dict__'):
+                    response_info += f", __dict__: {response.__dict__}"
+                if hasattr(response, 'as_dict'):
+                    response_info += f", as_dict: {response.as_dict()}"
+            except:
+                pass
+            raise ValueError(
+                f"Could not determine conversation_id from Genie start_conversation response. "
+                f"{response_info}"
+            )
         
         if not message:
-            raise ValueError("Could not get message object from Genie start_conversation response")
+            raise ValueError(
+                f"Could not get message object from Genie start_conversation response. "
+                f"conversation_id={conversation_id}, message_id={message_id}"
+            )
         
         message_id = getattr(message, "id", None)
         if not message_id:
-            raise ValueError("Could not determine message_id from Genie response")
+            # Try alternative ways to get message_id
+            if hasattr(message, "message_id"):
+                message_id = message.message_id
+            elif hasattr(message, "__dict__") and "id" in message.__dict__:
+                message_id = message.__dict__["id"]
+            
+            if not message_id:
+                raise ValueError(
+                    f"Could not determine message_id from Genie response. "
+                    f"Message type: {type(message)}, attributes: {[a for a in dir(message) if not a.startswith('_')]}"
+                )
         
         logger.info(f"Successfully started Genie conversation: {conversation_id}, message: {message_id}")
 
         # Poll until the message completes
-        result = self._poll_for_completion(conversation_id, message.id)
+        # Use the message_id we extracted, not message.id (which might not exist)
+        result = self._poll_for_completion(conversation_id, message_id)
 
         return {
             'sql': result.get('sql'),
@@ -264,6 +335,8 @@ class GenieService:
             }
         """
         
+        logger.info(f"Starting to poll for completion: conversation_id={conversation_id}, message_id={message_id}")
+        
         for attempt in range(self.max_poll_attempts):
             try:
                 # Get message status
@@ -273,49 +346,88 @@ class GenieService:
                     message_id=message_id
                 )
                 
-                status = message.status
-                logger.info(f"Genie status (attempt {attempt + 1}): {status}")
+                # Extract status - try multiple ways
+                status = None
+                if hasattr(message, 'status'):
+                    status = message.status
+                elif hasattr(message, '__dict__') and 'status' in message.__dict__:
+                    status = message.__dict__['status']
                 
-                # Check if completed
-                if status == MessageStatus.COMPLETED:
+                if not status:
+                    logger.warning(f"Could not determine status from message. Message attributes: {[a for a in dir(message) if not a.startswith('_')]}")
+                    # If we can't get status, try to extract result anyway (maybe it's already done)
+                    try:
+                        result = self._extract_result(message)
+                        if result.get('sql'):
+                            logger.info("Found SQL in message even though status is unknown - assuming completed")
+                            return result
+                    except Exception as e:
+                        logger.debug(f"Could not extract result: {e}")
+                
+                logger.info(f"Genie status (attempt {attempt + 1}/{self.max_poll_attempts}): {status}")
+                
+                # Check if completed (try multiple status string formats)
+                status_str = str(status).upper() if status else ""
+                if status == MessageStatus.COMPLETED or status_str == "COMPLETED":
                     logger.info("Genie query completed successfully")
                     return self._extract_result(message)
                 
                 # Check if failed
-                elif status == MessageStatus.FAILED:
-                    error_msg = getattr(message, 'error', 'Unknown error')
+                elif status == MessageStatus.FAILED or status_str == "FAILED":
+                    error_msg = getattr(message, 'error', None) or getattr(message, 'error_message', 'Unknown error')
                     logger.error(f"Genie query failed: {error_msg}")
                     raise Exception(f"Genie query failed: {error_msg}")
                 
                 # Check if cancelled
-                elif status == MessageStatus.CANCELLED:
+                elif status == MessageStatus.CANCELLED or status_str == "CANCELLED":
                     logger.error("Genie query was cancelled")
                     raise Exception("Genie query was cancelled")
                 
                 # Still running - wait and retry
                 elif status in [MessageStatus.EXECUTING_QUERY, MessageStatus.FETCHING_METADATA, 
-                               MessageStatus.QUERYING, MessageStatus.RUNNING]:
-                    logger.info(f"Genie still processing, waiting {self.poll_interval}s...")
+                               MessageStatus.QUERYING, MessageStatus.RUNNING] or \
+                     status_str in ["EXECUTING_QUERY", "FETCHING_METADATA", "QUERYING", "RUNNING", "PROCESSING"]:
+                    if attempt % 5 == 0:  # Log every 5th attempt to reduce log noise
+                        logger.info(f"Genie still processing (status: {status}), waiting {self.poll_interval}s... ({attempt + 1}/{self.max_poll_attempts})")
                     time.sleep(self.poll_interval)
                     continue
                 
                 else:
-                    # Unknown status, keep waiting
-                    logger.warning(f"Unknown Genie status: {status}, continuing to poll...")
+                    # Unknown status - try to extract result anyway (maybe it's done but status is unexpected)
+                    logger.warning(f"Unknown Genie status: {status}, attempting to extract result anyway...")
+                    try:
+                        result = self._extract_result(message)
+                        if result.get('sql'):
+                            logger.info(f"Successfully extracted result despite unknown status: {status}")
+                            return result
+                    except Exception as e:
+                        logger.debug(f"Could not extract result with unknown status: {e}")
+                    
+                    # If we can't extract result, keep waiting
+                    logger.info(f"Continuing to poll with unknown status: {status}")
                     time.sleep(self.poll_interval)
                     continue
                     
             except Exception as e:
-                logger.error(f"Error polling Genie: {str(e)}")
+                error_str = str(e)
+                # Don't retry on certain errors (like failed/cancelled)
+                if "failed" in error_str.lower() or "cancelled" in error_str.lower():
+                    raise
+                    
+                logger.error(f"Error polling Genie (attempt {attempt + 1}): {error_str}")
                 if attempt == self.max_poll_attempts - 1:
-                    raise Exception(f"Genie query timeout after {self.max_poll_attempts * self.poll_interval}s")
+                    raise Exception(f"Genie query timeout after {self.max_poll_attempts * self.poll_interval}s. Last error: {error_str}")
                 time.sleep(self.poll_interval)
         
         # Timeout
-        raise Exception(f"Genie query timeout after {self.max_poll_attempts * self.poll_interval} seconds")
+        raise Exception(f"Genie query timeout after {self.max_poll_attempts * self.poll_interval} seconds ({self.max_poll_attempts} attempts)")
     
     def _extract_result(self, message) -> Dict:
         """Extract SQL and results from completed Genie message"""
+        
+        logger.info("Extracting result from Genie message...")
+        logger.info(f"Message type: {type(message)}")
+        logger.info(f"Message attributes: {[a for a in dir(message) if not a.startswith('_')]}")
         
         result = {
             'sql': None,
@@ -324,30 +436,97 @@ class GenieService:
             'row_count': 0
         }
         
-        # Extract SQL from attachments
+        # Try to get message as dict for easier inspection
+        message_dict = None
+        try:
+            if hasattr(message, 'as_dict'):
+                message_dict = message.as_dict()
+                logger.info(f"Message as_dict keys: {list(message_dict.keys())}")
+            elif hasattr(message, '__dict__'):
+                message_dict = message.__dict__
+                logger.info(f"Message __dict__ keys: {list(message_dict.keys())}")
+        except Exception as e:
+            logger.debug(f"Could not convert message to dict: {e}")
+        
+        # Extract SQL from attachments (primary method)
         if hasattr(message, 'attachments') and message.attachments:
-            for attachment in message.attachments:
+            logger.info(f"Found {len(message.attachments)} attachment(s)")
+            for idx, attachment in enumerate(message.attachments):
+                logger.info(f"Attachment {idx} type: {type(attachment)}, attributes: {[a for a in dir(attachment) if not a.startswith('_')]}")
+                
                 if hasattr(attachment, 'query') and attachment.query:
                     query = attachment.query
+                    logger.info(f"Found query in attachment {idx}")
                     
                     # Get SQL text
                     if hasattr(query, 'query') and query.query:
                         result['sql'] = query.query
+                        logger.info(f"Extracted SQL from query.query: {len(result['sql'])} chars")
+                    
+                    # Try alternative SQL locations
+                    if not result['sql']:
+                        if hasattr(query, 'sql'):
+                            result['sql'] = query.sql
+                            logger.info(f"Extracted SQL from query.sql")
+                        elif hasattr(query, 'text'):
+                            result['sql'] = query.text
+                            logger.info(f"Extracted SQL from query.text")
                     
                     # Get execution time
                     if hasattr(query, 'duration'):
                         result['execution_time'] = query.duration
+                        logger.info(f"Extracted execution_time: {result['execution_time']}")
+                    elif hasattr(query, 'execution_time'):
+                        result['execution_time'] = query.execution_time
                     
                     # Get result data
                     if hasattr(query, 'result') and query.result:
-                        if hasattr(query.result, 'data_array'):
-                            result['data'] = query.result.data_array or []
+                        result_obj = query.result
+                        logger.info(f"Found result object, type: {type(result_obj)}")
+                        
+                        if hasattr(result_obj, 'data_array'):
+                            result['data'] = result_obj.data_array or []
                             result['row_count'] = len(result['data'])
+                            logger.info(f"Extracted {result['row_count']} rows from data_array")
+                        elif hasattr(result_obj, 'data'):
+                            result['data'] = result_obj.data or []
+                            result['row_count'] = len(result['data'])
+                            logger.info(f"Extracted {result['row_count']} rows from data")
+                        elif hasattr(result_obj, 'rows'):
+                            result['data'] = result_obj.rows or []
+                            result['row_count'] = len(result['data'])
+                            logger.info(f"Extracted {result['row_count']} rows from rows")
         
+        # Fallback: check if SQL is in message text/content
         if not result['sql']:
-            # Fallback: check if SQL is in message text
+            logger.info("SQL not found in attachments, checking message text/content...")
             if hasattr(message, 'text') and message.text:
                 result['sql'] = self._extract_sql_from_text(message.text)
+                if result['sql']:
+                    logger.info(f"Extracted SQL from message.text: {len(result['sql'])} chars")
+            elif hasattr(message, 'content') and message.content:
+                result['sql'] = self._extract_sql_from_text(message.content)
+                if result['sql']:
+                    logger.info(f"Extracted SQL from message.content")
+        
+        # Fallback: check message_dict directly
+        if not result['sql'] and message_dict:
+            logger.info("Checking message_dict for SQL...")
+            if 'sql' in message_dict:
+                result['sql'] = message_dict['sql']
+            elif 'query' in message_dict:
+                query_val = message_dict['query']
+                if isinstance(query_val, str):
+                    result['sql'] = query_val
+                elif isinstance(query_val, dict) and 'query' in query_val:
+                    result['sql'] = query_val['query']
+        
+        # Log final result
+        logger.info(f"Extraction complete - SQL: {'Found' if result['sql'] else 'Not found'}, "
+                   f"Rows: {result['row_count']}, Execution time: {result['execution_time']}")
+        
+        if not result['sql']:
+            logger.warning("Could not extract SQL from Genie message. Message structure may be unexpected.")
         
         return result
     
