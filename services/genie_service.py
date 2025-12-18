@@ -61,41 +61,99 @@ class GenieService:
         COMPLETED or times out.
         """
         
+        # Validate configuration before proceeding
+        if not self.space_id:
+            raise ValueError("GENIE_SPACE_ID is not configured. Please set it in your environment or configuration.")
+        
+        # Verify authentication by checking if we can access the workspace
+        try:
+            # Simple check: try to get current user info
+            current_user = self.w.current_user.me()
+            logger.info(f"Authenticated as: {getattr(current_user, 'user_name', 'unknown')}")
+        except Exception as e:
+            logger.warning(f"Could not verify authentication: {e}. Continuing anyway...")
+        
         # Build natural language query / prompt for Genie
         nl_query = self._build_nl_query(criteria)
-        logger.info(f"Sending cohort request to Genie: {nl_query}")
+        logger.info(f"Sending cohort request to Genie (space_id={self.space_id}): {nl_query}")
 
-        # The Genie API requires conversation_id as a positional argument.
-        # For a new conversation, pass None and the API will create one.
-        # Try creating a conversation first if the method exists
-        conversation_id = None
+        # Use start_conversation for Genie 2.0 API (required method for new conversations)
+        if not hasattr(self.w.genie, 'start_conversation'):
+            raise ValueError(
+                "start_conversation method not available. This code requires Genie 2.0 API. "
+                "Please ensure you're using a compatible version of the Databricks SDK."
+            )
+        
         try:
-            if hasattr(self.w.genie, 'create_conversation'):
-                conversation = self.w.genie.create_conversation(space_id=self.space_id)
-                conversation_id = getattr(conversation, "id", None) or getattr(conversation, "conversation_id", None)
-                logger.info(f"Created new Genie conversation: {conversation_id}")
-        except (AttributeError, Exception) as e:
-            logger.debug(f"create_conversation not available: {e}")
-
-        # Create the first message in the conversation
-        # conversation_id is a required positional argument - pass None for new conversations
-        # Method signature appears to be: create_message(space_id, conversation_id, content)
-        message = self.w.genie.create_message(
-            self.space_id,
-            conversation_id,  # None for new conversation, or ID if we created one
-            nl_query,
-        )
-
-        # Extract conversation_id from response if we didn't have it
-        if not conversation_id:
-            conversation_id = getattr(message, "conversation_id", None)
+            logger.info("Using start_conversation (Genie 2.0 API) to create new conversation")
+            response = self.w.genie.start_conversation(
+                space_id=self.space_id,
+                content=nl_query,
+            )
+            
+            # Extract conversation_id and message_id from response
+            # The response structure may vary, so try multiple attribute paths
+            conversation_id = getattr(response, "conversation_id", None) or getattr(response, "id", None)
+            message_id = getattr(response, "message_id", None)
+            
+            # Try alternative response structures
             if not conversation_id:
-                conversation_id = getattr(message, "id", None)
-        
+                if hasattr(response, "conversation"):
+                    conv_obj = response.conversation
+                    conversation_id = getattr(conv_obj, "id", None) or getattr(conv_obj, "conversation_id", None)
+            
+            if not message_id:
+                if hasattr(response, "message"):
+                    msg_obj = response.message
+                    message_id = getattr(msg_obj, "id", None)
+                    if not conversation_id:
+                        conversation_id = getattr(msg_obj, "conversation_id", None)
+                elif hasattr(response, "id"):
+                    message_id = response.id
+            
+            logger.info(f"Started new Genie conversation: {conversation_id}, message: {message_id}")
+            
+            # Get the message object for polling
+            # The response might already contain the message, or we need to fetch it
+            if hasattr(response, 'message') and response.message:
+                message = response.message
+            elif conversation_id and message_id:
+                # Fetch the message separately for polling
+                message = self.w.genie.get_message(
+                    space_id=self.space_id,
+                    conversation_id=conversation_id,
+                    message_id=message_id
+                )
+            else:
+                # Fallback: use response as message if it has the necessary attributes
+                message = response
+                
+        except Exception as e:
+            error_msg = f"Failed to start Genie conversation: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            
+            # Check if it's an authentication/permission error
+            if "does not own" in str(e).lower() or "permission" in str(e).lower() or "unauthorized" in str(e).lower():
+                raise ValueError(
+                    f"Authentication or permission error: {error_msg}\n"
+                    f"Please verify:\n"
+                    f"1. Your DATABRICKS_TOKEN has access to the Genie space (space_id={self.space_id})\n"
+                    f"2. The GENIE_SPACE_ID is correct\n"
+                    f"3. Your user has permissions to create conversations in this space"
+                )
+            raise ValueError(f"Cannot start Genie conversation. {error_msg}")
+
         if not conversation_id:
-            raise ValueError("Could not determine conversation_id from Genie response")
+            raise ValueError("Could not determine conversation_id from Genie start_conversation response")
         
-        logger.info(f"Started Genie conversation: {conversation_id}")
+        if not message:
+            raise ValueError("Could not get message object from Genie start_conversation response")
+        
+        message_id = getattr(message, "id", None)
+        if not message_id:
+            raise ValueError("Could not determine message_id from Genie response")
+        
+        logger.info(f"Successfully started Genie conversation: {conversation_id}, message: {message_id}")
 
         # Poll until the message completes
         result = self._poll_for_completion(conversation_id, message.id)
