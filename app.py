@@ -65,6 +65,10 @@ if 'selected_codes' not in st.session_state:
     st.session_state.selected_codes = []
 if 'genie_result' not in st.session_state:
     st.session_state.genie_result = None
+if 'genie_error' not in st.session_state:
+    st.session_state.genie_error = None
+if 'genie_running' not in st.session_state:
+    st.session_state.genie_running = False
 
 
 def initialize_services():
@@ -259,11 +263,11 @@ def run_genie_for_refined_criteria():
     selected_codes = st.session_state.get("selected_codes") or []
 
     if not refined_text or not selected_codes:
-        st.error("I need both a refined criteria and at least one selected code before calling Genie.")
+        st.session_state.genie_error = "I need both a refined criteria and at least one selected code before calling Genie."
         return
 
     if not hasattr(st.session_state, "genie_service") or st.session_state.genie_service is None:
-        st.error("Genie service is not initialized. Please check configuration.")
+        st.session_state.genie_error = "Genie service is not initialized. Please check configuration."
         return
 
     # Build the criteria dict expected by GenieService._build_nl_query
@@ -298,19 +302,19 @@ def run_genie_for_refined_criteria():
 
     genie = st.session_state.genie_service
 
-    with st.spinner("Asking Genie to generate and run the cohort SQL..."):
-        try:
-            result = genie.create_cohort_query(genie_criteria)
-        except Exception as e:
-            st.error(f"Error while calling Genie: {e}")
-            logger.error(f"Genie error: {e}", exc_info=True)
-            return
+    # Clear any previous error
+    st.session_state.genie_error = None
 
-    st.session_state.genie_result = result
-    st.session_state.genie_conversation_id = result.get("conversation_id")
-
-    # Small success message; the detailed SQL/results are rendered in the main UI below.
-    st.success("Genie has finished generating and running the query for this criteria.")
+    try:
+        # This will poll Genie until completion (can take up to 2 minutes)
+        result = genie.create_cohort_query(genie_criteria)
+        st.session_state.genie_result = result
+        st.session_state.genie_conversation_id = result.get("conversation_id")
+        st.session_state.genie_error = None
+    except Exception as e:
+        error_msg = f"Error while calling Genie: {e}"
+        st.session_state.genie_error = error_msg
+        logger.error(f"Genie error: {e}", exc_info=True)
 
 
 def search_codes_for_criteria(criteria_text: str):
@@ -682,16 +686,33 @@ def render_chat_page():
             if st.button("Add these codes and refine criteria", use_container_width=True):
                 refined_text = refine_criteria_with_codes()
                 if refined_text:
-                    st.subheader("Refined criteria I'll use going forward")
-                    st.write(refined_text)
-                    # Offer to send this refined criteria to Genie
-                    if st.button("Ask Genie to find patients for this refined criteria", use_container_width=True):
-                        run_genie_for_refined_criteria()
-        else:
-            st.warning(
-                "You haven't selected any codes yet. I won't be able to build a cohort "
-                "until there is at least one code to represent the condition."
-            )
+                    st.rerun()  # Rerun to show the refined criteria and Genie button below
+            else:
+                st.warning(
+                    "You haven't selected any codes yet. I won't be able to build a cohort "
+                    "until there is at least one code to represent the condition."
+                )
+
+    # Show refined criteria and offer to send to Genie (after user has refined)
+    refined_text = st.session_state.get("refined_criteria_text")
+    if refined_text:
+        st.markdown("---")
+        st.subheader("Refined criteria I'll use going forward")
+        st.write(refined_text)
+        
+        if st.session_state.get("genie_running"):
+            # Actually call Genie now (this will poll and take time)
+            with st.spinner("Asking Genie to generate and run the cohort SQL... This may take up to 2 minutes."):
+                run_genie_for_refined_criteria()
+                st.session_state.genie_running = False
+                st.rerun()  # Rerun to show results or error
+        elif st.session_state.get("genie_error"):
+            st.error(f"❌ {st.session_state.genie_error}")
+        elif not st.session_state.get("genie_result"):
+            # Only show the Genie button if we haven't already run Genie
+            if st.button("Ask Genie to find patients for this refined criteria", use_container_width=True, type="primary"):
+                st.session_state.genie_running = True
+                st.rerun()  # Rerun to show the "running" message
 
     # If Genie has run, surface a concise view of what it did.
     genie_result = st.session_state.get("genie_result")
