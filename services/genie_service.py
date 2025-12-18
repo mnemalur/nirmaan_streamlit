@@ -448,6 +448,29 @@ class GenieService:
         
         for attempt in range(self.max_poll_attempts):
             try:
+                # First, check all messages in conversation for data (data might be in a different message)
+                if attempt > 0 and attempt % 5 == 0:  # Check every 5th attempt to avoid too many API calls
+                    try:
+                        if hasattr(self.w.genie, 'list_messages'):
+                            messages = self.w.genie.list_messages(
+                                space_id=self.space_id,
+                                conversation_id=conversation_id
+                            )
+                            if messages:
+                                message_list = list(messages) if hasattr(messages, '__iter__') else [messages]
+                                logger.info(f"Checking all {len(message_list)} message(s) in conversation for data...")
+                                for msg in message_list:
+                                    try:
+                                        msg_result = self._extract_result(msg)
+                                        if msg_result.get('data') and len(msg_result.get('data', [])) > 0:
+                                            logger.info(f"Found data in message {getattr(msg, 'id', 'unknown')}: {len(msg_result['data'])} rows")
+                                            # Return immediately if we find data
+                                            return msg_result
+                                    except Exception as e:
+                                        logger.debug(f"Could not extract from message: {e}")
+                    except Exception as e:
+                        logger.debug(f"Could not list messages: {e}")
+                
                 # Get message status
                 message = self.w.genie.get_message(
                     space_id=self.space_id,
@@ -475,31 +498,25 @@ class GenieService:
                 
                 logger.info(f"Genie status (attempt {attempt + 1}/{self.max_poll_attempts}): {status}")
                 
+                # Extract result to check what we have
+                result = self._extract_result(message)
+                has_sql = bool(result.get('sql'))
+                has_data = bool(result.get('data')) and len(result.get('data', [])) > 0
+                
                 # Check if completed (try multiple status string formats)
                 status_str = str(status).upper() if status else ""
-                if status == MessageStatus.COMPLETED or status_str == "COMPLETED":
-                    logger.info("Genie query completed successfully")
-                    result = self._extract_result(message)
+                is_completed = (status == MessageStatus.COMPLETED or status_str == "COMPLETED")
+                
+                if is_completed:
+                    logger.info(f"Genie query completed. SQL: {has_sql}, Data: {has_data} ({len(result.get('data', []))} rows)")
                     
-                    # If we have SQL but no data, wait a bit more - data might still be loading
-                    if result.get('sql') and not result.get('data'):
-                        logger.info("SQL found but no data yet. Waiting a bit more for data to load...")
-                        # Wait a few more seconds and check again
-                        time.sleep(3)
-                        try:
-                            message = self.w.genie.get_message(
-                                space_id=self.space_id,
-                                conversation_id=conversation_id,
-                                message_id=message_id
-                            )
-                            result = self._extract_result(message)
-                            logger.info(f"After waiting, found {len(result.get('data', []))} rows")
-                        except Exception as e:
-                            logger.debug(f"Could not re-fetch message after wait: {e}")
-                    
-                    # If still no data, check for follow-up messages that might contain results
-                    if result.get('sql') and not result.get('data'):
-                        logger.info("Still no data in completed message. Checking for follow-up messages...")
+                    # CRITICAL: If we have SQL but no data, keep polling - data is still loading!
+                    if has_sql and not has_data:
+                        logger.info(
+                            f"SQL found but no data yet (attempt {attempt + 1}/{self.max_poll_attempts}). "
+                            f"Genie is still processing data. Continuing to poll..."
+                        )
+                        # Check for follow-up messages that might have data
                         try:
                             if hasattr(self.w.genie, 'list_messages'):
                                 messages = self.w.genie.list_messages(
@@ -508,24 +525,43 @@ class GenieService:
                                 )
                                 if messages:
                                     message_list = list(messages) if hasattr(messages, '__iter__') else [messages]
-                                    # Check messages after the current one (they might contain data)
+                                    # Check all messages for data (not just after current one)
                                     for msg in message_list:
                                         msg_id = getattr(msg, 'id', None)
-                                        if msg_id and msg_id != message_id:
-                                            logger.info(f"Checking follow-up message {msg_id} for data...")
+                                        if msg_id:  # Check all messages, including current
                                             try:
-                                                follow_up_result = self._extract_result(msg)
-                                                if follow_up_result.get('data'):
-                                                    logger.info(f"Found data in follow-up message: {len(follow_up_result['data'])} rows")
-                                                    # Merge results: keep SQL from first, data from follow-up
-                                                    result['data'] = follow_up_result['data']
+                                                msg_result = self._extract_result(msg)
+                                                if msg_result.get('data') and len(msg_result.get('data', [])) > 0:
+                                                    logger.info(f"Found data in message {msg_id}: {len(msg_result['data'])} rows")
+                                                    # Merge: keep SQL from first, data from this message
+                                                    if not result.get('sql') and msg_result.get('sql'):
+                                                        result['sql'] = msg_result['sql']
+                                                    result['data'] = msg_result['data']
                                                     result['row_count'] = len(result['data'])
+                                                    has_data = True
                                                     break
                                             except Exception as e:
-                                                logger.debug(f"Could not extract from follow-up message: {e}")
+                                                logger.debug(f"Could not extract from message {msg_id}: {e}")
                         except Exception as e:
-                            logger.debug(f"Could not list messages to check for data: {e}")
+                            logger.debug(f"Could not list messages: {e}")
+                        
+                        # If we found data in follow-up messages, return it
+                        if has_data:
+                            logger.info(f"Returning result with data from follow-up message: {len(result['data'])} rows")
+                            return result
+                        
+                        # Otherwise, continue polling - don't return yet!
+                        logger.info(f"No data found yet. Waiting {self.poll_interval}s and continuing to poll...")
+                        time.sleep(self.poll_interval)
+                        continue
                     
+                    # If we have both SQL and data, or just data, return it
+                    if has_data or (has_sql and has_data):
+                        logger.info(f"Returning completed result: SQL={has_sql}, Data rows={len(result.get('data', []))}")
+                        return result
+                    
+                    # If completed but no SQL and no data, something's wrong but return what we have
+                    logger.warning("Status is COMPLETED but no SQL or data found. Returning what we have.")
                     return result
                 
                 # Check if failed
@@ -539,10 +575,21 @@ class GenieService:
                     logger.error("Genie query was cancelled")
                     raise Exception("Genie query was cancelled")
                 
-                # Still running - wait and retry
+                # Still running - wait and retry, but check for data anyway (sometimes data arrives before status changes)
                 elif status in [MessageStatus.EXECUTING_QUERY, MessageStatus.FETCHING_METADATA, 
                                MessageStatus.QUERYING, MessageStatus.RUNNING] or \
                      status_str in ["EXECUTING_QUERY", "FETCHING_METADATA", "QUERYING", "RUNNING", "PROCESSING"]:
+                    # Even if status says running, check if we have data - sometimes data arrives early
+                    has_sql = bool(result.get('sql'))
+                    has_data = bool(result.get('data')) and len(result.get('data', [])) > 0
+                    
+                    if has_data:
+                        logger.info(
+                            f"Found data even though status is {status}! "
+                            f"Returning result with {len(result['data'])} rows."
+                        )
+                        return result
+                    
                     # Log progress more frequently as we approach timeout
                     elapsed_time = (attempt + 1) * self.poll_interval
                     remaining_time = (self.max_poll_attempts - attempt - 1) * self.poll_interval
@@ -550,6 +597,7 @@ class GenieService:
                     if attempt % 10 == 0 or remaining_time <= 60:  # Log every 10 attempts, or every attempt in last minute
                         logger.info(
                             f"Genie still processing (status: {status}). "
+                            f"SQL: {has_sql}, Data: {has_data}. "
                             f"Elapsed: {elapsed_time}s, Remaining: ~{remaining_time}s "
                             f"({attempt + 1}/{self.max_poll_attempts} attempts)"
                         )
@@ -557,18 +605,27 @@ class GenieService:
                     continue
                 
                 else:
-                    # Unknown status - try to extract result anyway (maybe it's done but status is unexpected)
-                    logger.warning(f"Unknown Genie status: {status}, attempting to extract result anyway...")
-                    try:
-                        result = self._extract_result(message)
-                        if result.get('sql'):
-                            logger.info(f"Successfully extracted result despite unknown status: {status}")
-                            return result
-                    except Exception as e:
-                        logger.debug(f"Could not extract result with unknown status: {e}")
+                    # Unknown status - check if we have data, but keep polling if we only have SQL
+                    logger.warning(f"Unknown Genie status: {status}, checking for results...")
+                    has_sql = bool(result.get('sql'))
+                    has_data = bool(result.get('data')) and len(result.get('data', [])) > 0
                     
-                    # If we can't extract result, keep waiting
-                    logger.info(f"Continuing to poll with unknown status: {status}")
+                    # If we have data (with or without SQL), return it
+                    if has_data:
+                        logger.info(f"Found data despite unknown status. Returning result: {len(result['data'])} rows")
+                        return result
+                    
+                    # If we have SQL but no data, keep polling - data might still be loading
+                    if has_sql and not has_data:
+                        logger.info(
+                            f"Have SQL but no data yet (status: {status}). "
+                            f"Continuing to poll for data... ({attempt + 1}/{self.max_poll_attempts})"
+                        )
+                        time.sleep(self.poll_interval)
+                        continue
+                    
+                    # If we have neither, keep waiting
+                    logger.info(f"Continuing to poll with unknown status: {status} (no SQL or data yet)")
                     time.sleep(self.poll_interval)
                     continue
                     
