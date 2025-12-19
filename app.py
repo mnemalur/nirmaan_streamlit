@@ -780,15 +780,17 @@ def render_chat_page():
     # Step 4: Genie Results
     genie_result = st.session_state.get("genie_result")
     if genie_result:
-        with st.expander("📊 Step 4: Query Results", expanded=True):
-            sql = genie_result.get("sql")
-            data = genie_result.get("data", [])
-            row_count = genie_result.get("row_count", 0)
-            exec_time = genie_result.get("execution_time")
+        sql = genie_result.get("sql")
+        data = genie_result.get("data", [])
+        row_count = genie_result.get("row_count", 0)
+        exec_time = genie_result.get("execution_time")
 
-            if sql:
-                with st.expander("📝 Generated SQL", expanded=False):
-                    st.code(sql, language="sql")
+        # Show SQL outside the results expander to avoid nesting
+        if sql:
+            with st.expander("📝 Generated SQL", expanded=False):
+                st.code(sql, language="sql")
+        
+        with st.expander("📊 Step 4: Query Results", expanded=True):
 
             # Display row count with clear messaging
             if row_count is not None and row_count > 0:
@@ -886,8 +888,8 @@ def render_chat_page():
                     # Show summary statistics if numeric columns exist
                     numeric_cols = display_df.select_dtypes(include=['number']).columns
                     if len(numeric_cols) > 0:
-                        with st.expander("📈 Summary Statistics", expanded=False):
-                            st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
+                        st.markdown("**📈 Summary Statistics**")
+                        st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
                 except Exception as e:
                     # If DataFrame conversion fails, show raw data (but still limit)
                     logger.warning(f"Could not convert Genie data to DataFrame: {e}")
