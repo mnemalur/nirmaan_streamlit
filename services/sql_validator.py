@@ -126,15 +126,14 @@ class SQLValidator:
         Returns:
             Tuple of (is_valid, warnings, validation_details)
         """
-        # Dimension-specific expected columns
+        # Dimension-specific expected columns (ONLY the 9 dimensions we support)
         dimension_columns = {
-            'age_groups': ['age_group', 'patient_count', 'percentage'],
             'gender': ['gender', 'patient_count', 'percentage'],
             'race': ['race', 'patient_count', 'percentage'],
             'ethnicity': ['ethnicity', 'patient_count', 'percentage'],
             'visit_level': ['visit_level', 'encounter_count', 'patient_count', 'percentage'],
-            'admit_source': ['admit_source', 'encounter_count', 'patient_count', 'percentage'],
             'admit_type': ['admit_type', 'encounter_count', 'patient_count', 'percentage'],
+            'admit_source': ['admit_source', 'encounter_count', 'patient_count', 'percentage'],
             'urban_rural': ['location_type', 'patient_count', 'percentage'],
             'teaching': ['teaching_status', 'patient_count', 'percentage'],
             'bed_count': ['bed_count_group', 'patient_count', 'percentage'],
@@ -198,7 +197,7 @@ class SQLValidator:
                 if alias == 'd':
                     table_name = 'phd_de_patdemo'
                 elif alias == 'p':
-                    table_name = 'provider'
+                    table_name = 'phd_de_providers'  # Updated: use phd_de_providers, not provider
                 elif alias == 'e':
                     column_validation_warnings.append(
                         f"⚠️ INVALID TABLE: 'encounter' table (alias 'e') does not exist. Use phd_de_patdemo (alias 'd') instead."

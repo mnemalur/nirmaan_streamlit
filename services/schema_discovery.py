@@ -200,16 +200,24 @@ class SchemaDiscoveryService:
                         break
         
         if not provider_table:
-            # Check exact match first
+            # Check exact match first for phd_de_providers
             for table_info in tables:
-                if table_info['TABLE_NAME'].lower() == 'provider':
+                table_name_lower = table_info['TABLE_NAME'].lower()
+                if table_name_lower == 'phd_de_providers':
                     provider_table = table_info['TABLE_NAME']
                     break
-            # If still not found, use first table with 'provider' or 'site'
+            # If still not found, try variations
             if not provider_table:
                 for table_info in tables:
                     table_name_lower = table_info['TABLE_NAME'].lower()
-                    if 'provider' in table_name_lower or 'site' in table_name_lower:
+                    if 'phd_de_provider' in table_name_lower or table_name_lower == 'phd_de_providers':
+                        provider_table = table_info['TABLE_NAME']
+                        break
+            # Last resort: look for provider
+            if not provider_table:
+                for table_info in tables:
+                    table_name_lower = table_info['TABLE_NAME'].lower()
+                    if 'provider' in table_name_lower:
                         provider_table = table_info['TABLE_NAME']
                         break
         
@@ -238,7 +246,7 @@ class SchemaDiscoveryService:
             'medications': []
         }
         
-        logger.info(f"Dimension table mapping - patdemo: {patdemo_table}, provider: {provider_table}")
+        logger.info(f"Dimension table mapping - phd_de_patdemo: {patdemo_table}, phd_de_providers: {provider_table}")
         
         return dimension_to_tables
     
@@ -287,7 +295,7 @@ class SchemaDiscoveryService:
         
         # For site dimensions, also get phd_de_patdemo columns (needed for bridge join)
         if dimension_name in ['urban_rural', 'teaching', 'bed_count']:
-            # Find phd_de_patdemo table
+            # Find phd_de_patdemo table (for bridge join)
             tables = self.discover_tables(catalog, schema)
             patdemo_table = None
             for table_info in tables:
@@ -304,6 +312,22 @@ class SchemaDiscoveryService:
                     col['COLUMN_NAME']: col.get('COMMENT', '') 
                     for col in columns if col.get('COMMENT')
                 }
+            
+            # Also find phd_de_providers table (target table for site dimensions)
+            providers_table = None
+            for table_info in tables:
+                table_name_lower = table_info['TABLE_NAME'].lower()
+                if table_name_lower == 'phd_de_providers' or 'phd_de_provider' in table_name_lower:
+                    providers_table = table_info['TABLE_NAME']
+                    break
+            
+            if providers_table and providers_table not in table_columns:
+                columns = self.discover_columns(catalog, schema, providers_table)
+                table_columns[providers_table] = {col['COLUMN_NAME']: col for col in columns}
+                column_comments[providers_table] = {
+                    col['COLUMN_NAME']: col.get('COMMENT', '') 
+                    for col in columns if col.get('COMMENT')
+                }
         
         result = {}
         
@@ -316,23 +340,10 @@ class SchemaDiscoveryService:
         
         # Map dimension to expected columns and find actual matches
         # NOTE: phd_de_patdemo is ENCOUNTER-CENTRIC (patient_key = encounter/visit)
-        # Patient-level: AGE, GENDER, race, HISPANIC_IND
+        # Patient-level: GENDER, race, HISPANIC_IND
         # Visit-level: I_O_IND, ADM_TYPE, PAT_TYPE
         
-        if dimension_name == 'age_groups':
-            # Look for AGE column in phd_de_patdemo
-            cols = find_table('phd_de_patdemo')
-            if cols:
-                # Try exact match first, then case-insensitive
-                if 'AGE' in cols:
-                    result['age_column'] = 'AGE'
-                else:
-                    for col_name in cols.keys():
-                        if col_name.upper() == 'AGE' or (col_name.upper().startswith('AGE') and len(col_name) <= 5):
-                            result['age_column'] = col_name
-                            break
-        
-        elif dimension_name == 'gender':
+        if dimension_name == 'gender':
             cols = find_table('phd_de_patdemo')
             if cols:
                 if 'GENDER' in cols:

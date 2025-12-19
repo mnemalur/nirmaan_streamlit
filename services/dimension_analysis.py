@@ -410,56 +410,24 @@ class DimensionAnalysisService:
             cohort_join_key = "pat_key"
             patdemo_join_key = "pat_key"  # phd_de_patdemo uses pat_key
         
-        # Build all dimension queries
+        # Build all dimension queries (ONLY the 9 dimensions we support)
         queries = {}
         
-        # 1. Age Groups
-        queries['age_groups'] = f"""
-            SELECT 
-                CASE 
-                    WHEN d.age < 18 THEN '<18'
-                    WHEN d.age BETWEEN 18 AND 34 THEN '18-34'
-                    WHEN d.age BETWEEN 35 AND 49 THEN '35-49'
-                    WHEN d.age BETWEEN 50 AND 64 THEN '50-64'
-                    WHEN d.age BETWEEN 65 AND 79 THEN '65-79'
-                    ELSE '80+'
-                END as age_group,
-                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
-                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
-            FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
-                ON c.{cohort_join_key} = d.{patdemo_join_key}
-            WHERE d.age IS NOT NULL
-            GROUP BY age_group
-            ORDER BY 
-                CASE age_group
-                    WHEN '<18' THEN 1
-                    WHEN '18-34' THEN 2
-                    WHEN '35-49' THEN 3
-                    WHEN '50-64' THEN 4
-                    WHEN '65-79' THEN 5
-                    WHEN '80+' THEN 6
-                END
-        """
-        
-        # 2. Gender
+        # 1. Gender (Patient-level from phd_de_patdemo - GENDER column)
         queries['gender'] = f"""
             SELECT 
-                CASE 
-                    WHEN d.gender = 'M' THEN 'Male'
-                    WHEN d.gender = 'F' THEN 'Female'
-                    ELSE COALESCE(d.gender, 'Unknown')
-                END as gender,
+                COALESCE(d.GENDER, 'Unknown') as gender,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.GENDER IS NOT NULL
             GROUP BY gender
             ORDER BY patient_count DESC
         """
         
-        # 3. Race
+        # 2. Race (Patient-level from phd_de_patdemo - race column)
         queries['race'] = f"""
             SELECT 
                 COALESCE(d.race, 'Unknown') as race,
@@ -468,24 +436,26 @@ class DimensionAnalysisService:
             FROM {cohort_table_quoted} c
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.race IS NOT NULL
             GROUP BY race
             ORDER BY patient_count DESC
         """
         
-        # 4. Ethnicity
+        # 3. Ethnicity (Patient-level from phd_de_patdemo - HISPANIC_IND column)
         queries['ethnicity'] = f"""
             SELECT 
-                COALESCE(d.ethnicity, 'Unknown') as ethnicity,
+                COALESCE(d.HISPANIC_IND, 'Unknown') as ethnicity,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.HISPANIC_IND IS NOT NULL
             GROUP BY ethnicity
             ORDER BY patient_count DESC
         """
         
-        # 5. Visit Level (Inpatient/Outpatient) - using phd_de_patdemo (I_O_IND column)
+        # 4. Visit Level (Visit-level from phd_de_patdemo - I_O_IND column)
         # NOTE: phd_de_patdemo IS the encounter table - patient_key represents encounters/visits
         queries['visit_level'] = f"""
             SELECT 
@@ -501,22 +471,7 @@ class DimensionAnalysisService:
             ORDER BY encounter_count DESC
         """
         
-        # 6. Admit Source - using phd_de_patdemo (PAT_TYPE column)
-        queries['admit_source'] = f"""
-            SELECT 
-                COALESCE(d.PAT_TYPE, 'Unknown') as admit_source,
-                COUNT(DISTINCT d.{patdemo_join_key}) as encounter_count,
-                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
-                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
-            FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
-                ON c.{cohort_join_key} = d.{patdemo_join_key}
-            WHERE d.PAT_TYPE IS NOT NULL
-            GROUP BY admit_source
-            ORDER BY encounter_count DESC
-        """
-        
-        # 7. Admit Type - using phd_de_patdemo (ADM_TYPE column)
+        # 5. Admit Type (Visit-level from phd_de_patdemo - ADM_TYPE column)
         queries['admit_type'] = f"""
             SELECT 
                 COALESCE(d.ADM_TYPE, 'Unknown') as admit_type,
@@ -528,6 +483,21 @@ class DimensionAnalysisService:
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             WHERE d.ADM_TYPE IS NOT NULL
             GROUP BY admit_type
+            ORDER BY encounter_count DESC
+        """
+        
+        # 6. Admit Source (Visit-level from phd_de_patdemo - PAT_TYPE column)
+        queries['admit_source'] = f"""
+            SELECT 
+                COALESCE(d.PAT_TYPE, 'Unknown') as admit_source,
+                COUNT(DISTINCT d.{patdemo_join_key}) as encounter_count,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.PAT_TYPE IS NOT NULL
+            GROUP BY admit_source
             ORDER BY encounter_count DESC
         """
         
@@ -544,8 +514,8 @@ class DimensionAnalysisService:
             FROM {cohort_table_quoted} c
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
-            JOIN {config.patient_table_prefix}.provider p
-                ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY)
+            JOIN {config.patient_table_prefix}.phd_de_providers p
+                ON d.PROV_ID = p.PROV_ID
             GROUP BY location_type
             ORDER BY patient_count DESC
         """
@@ -563,8 +533,8 @@ class DimensionAnalysisService:
             FROM {cohort_table_quoted} c
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
-            JOIN {config.patient_table_prefix}.provider p
-                ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY)
+            JOIN {config.patient_table_prefix}.phd_de_providers p
+                ON d.PROV_ID = p.PROV_ID
             GROUP BY teaching_status
             ORDER BY patient_count DESC
         """
@@ -584,8 +554,8 @@ class DimensionAnalysisService:
             FROM {cohort_table_quoted} c
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
-            JOIN {config.patient_table_prefix}.provider p
-                ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY)
+            JOIN {config.patient_table_prefix}.phd_de_providers p
+                ON d.PROV_ID = p.PROV_ID
             WHERE p.bed_count IS NOT NULL
             GROUP BY bed_count_group
             ORDER BY 

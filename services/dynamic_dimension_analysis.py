@@ -139,24 +139,21 @@ Patient Schema: {config.patient_catalog}.{config.patient_schema}
 """
         
         # SIMPLIFIED: Explicit table mapping with EXACT column names
-        if dimension_name in ['age_groups', 'gender', 'race', 'ethnicity', 'visit_level', 'admit_source', 'admit_type']:
+            if dimension_name in ['gender', 'race', 'ethnicity', 'visit_level', 'admit_type', 'admit_source']:
             prompt += f"⚠️ **CRITICAL**: For '{dimension_name}', you **MUST use phd_de_patdemo table**\n"
             prompt += f"- Table: {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo (use alias 'd')\n"
             prompt += f"- **CRITICAL**: phd_de_patdemo IS the encounter table - there is NO separate encounter table\n"
             prompt += f"- The 'patient_key' column in phd_de_patdemo represents an ENCOUNTER/VISIT (not a patient)\n"
             prompt += f"- **ONLY ALLOWED COLUMNS in phd_de_patdemo (alias 'd')**:\n"
-            prompt += f"  * Patient-level: AGE, GENDER, race, HISPANIC_IND\n"
+            prompt += f"  * Patient-level: GENDER, race, HISPANIC_IND\n"
             prompt += f"  * Visit-level: I_O_IND, ADM_TYPE, PAT_TYPE\n"
-            prompt += f"  * Join keys: PAT_KEY, MEDREC_KEY, PROV_ID, PROVIDER_KEY\n"
+            prompt += f"  * Join keys: PAT_KEY, MEDREC_KEY, PROV_ID\n"
             prompt += f"  * Time dimension: DISCHARGE_DATE (for time-based analysis)\n"
             prompt += f"- **DO NOT use any other columns - they do not exist and will cause UNRESOLVED COLUMN errors!**\n"
             prompt += f"- For visit-level dimensions, count DISTINCT d.{join_key} as encounter_count (since patient_key = encounter)\n"
             # Use exact column names if discovered (include comments if available)
+            # Only include columns for the 9 dimensions we support
             if exact_columns:
-                if 'age_column' in exact_columns:
-                    comment = exact_columns.get('age_column_comment', '')
-                    comment_text = f" - {comment}" if comment else ""
-                    prompt += f"- **EXACT column for age**: d.{exact_columns['age_column']} (patient-level dimension){comment_text}\n"
                 if 'gender_column' in exact_columns:
                     comment = exact_columns.get('gender_column_comment', '')
                     comment_text = f" - {comment}" if comment else ""
@@ -185,13 +182,11 @@ Patient Schema: {config.patient_catalog}.{config.patient_schema}
                 # Fallback to expected names if discovery failed
                 # Still provide strict list of allowed columns
                 prompt += f"- **ALLOWED COLUMNS for phd_de_patdemo (alias 'd')**:\n"
-                prompt += f"  * Patient-level: AGE, GENDER, race, HISPANIC_IND\n"
+                prompt += f"  * Patient-level: GENDER, race, HISPANIC_IND\n"
                 prompt += f"  * Visit-level: I_O_IND, ADM_TYPE, PAT_TYPE\n"
-                prompt += f"  * Join keys: PAT_KEY, MEDREC_KEY, PROV_ID, PROVIDER_KEY\n"
+                prompt += f"  * Join keys: PAT_KEY, MEDREC_KEY, PROV_ID\n"
                 prompt += f"- **DO NOT use any other columns - they do not exist!**\n"
-                if dimension_name == 'age_groups':
-                    prompt += f"- Use column: d.AGE (patient-level)\n"
-                elif dimension_name == 'gender':
+                if dimension_name == 'gender':
                     prompt += f"- Use column: d.GENDER (patient-level)\n"
                 elif dimension_name == 'race':
                     prompt += f"- Use column: d.race (patient-level)\n"
@@ -209,10 +204,10 @@ Patient Schema: {config.patient_catalog}.{config.patient_schema}
             # Use exact prov_id/provider_key column if discovered
             prov_id_col = exact_columns.get('prov_id_column', 'prov_id')
             # PROVIDER_KEY and PROV_ID mean the same thing - use COALESCE to handle both
-            prompt += f"2. Second join phd_de_patdemo → provider: ON COALESCE(d.{prov_id_col}, d.PROVIDER_KEY) = COALESCE(p.{prov_id_col}, p.PROVIDER_KEY) (alias 'p')\n"
-            prompt += f"   **Note**: PROVIDER_KEY and PROV_ID mean the same thing - use COALESCE to handle either column name\n"
+            prompt += f"2. Second join phd_de_patdemo → phd_de_providers: ON d.PROV_ID = p.PROV_ID (alias 'p')\n"
+            prompt += f"   **Note**: Both phd_de_patdemo and phd_de_providers use PROV_ID as the join key\n"
             prompt += f"- Provider table: {config.patient_catalog}.{config.patient_schema}.provider\n"
-            prompt += f"- **ONLY ALLOWED COLUMNS in provider (alias 'p')**:\n"
+            prompt += f"- **ONLY ALLOWED COLUMNS in phd_de_providers (alias 'p')**:\n"
             # Use exact provider columns if discovered (include comments if available)
             if exact_columns:
                 if 'location_type_column' in exact_columns:
@@ -231,7 +226,7 @@ Patient Schema: {config.patient_catalog}.{config.patient_schema}
                 prompt += f"  * URBAN_RURAL (location_type)\n"
                 prompt += f"  * TEACHING (teaching_flag)\n"
                 prompt += f"  * BEDS_GRP (bed_count)\n"
-            prompt += f"  * Join keys: PROV_ID, PROVIDER_KEY\n"
+            prompt += f"  * Join key: PROV_ID\n"
             prompt += f"- **DO NOT use any other columns - they do not exist and will cause UNRESOLVED COLUMN errors!**\n"
             prompt += f"- Note: prov_id and provider_key are the same - use COALESCE to handle either\n"
         else:
@@ -258,33 +253,19 @@ Schema Information:
 
 Example SQL Templates:
 
-For PATIENT/VISIT dimensions (age_groups, gender, race, ethnicity, visit_level, admit_source, admit_type):
+For PATIENT/VISIT dimensions (gender, race, ethnicity, visit_level, admit_type, admit_source):
 ```sql
+-- Example for gender dimension:
 SELECT 
-    CASE 
-        WHEN d.AGE < 18 THEN '<18'
-        WHEN d.AGE BETWEEN 18 AND 34 THEN '18-34'
-        WHEN d.AGE BETWEEN 35 AND 49 THEN '35-49'
-        WHEN d.AGE BETWEEN 50 AND 64 THEN '50-64'
-        WHEN d.AGE BETWEEN 65 AND 79 THEN '65-79'
-        ELSE '80+'
-    END as age_group,
+    COALESCE(d.GENDER, 'Unknown') as gender,
     COUNT(DISTINCT c.{join_key}) as patient_count,
     ROUND(COUNT(DISTINCT c.{join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{join_key})) OVER(), 2) as percentage
 FROM {cohort_table_quoted} c
 JOIN {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo d 
     ON c.{join_key} = d.{join_key}
-WHERE d.AGE IS NOT NULL
-GROUP BY age_group
-ORDER BY 
-    CASE age_group
-        WHEN '<18' THEN 1
-        WHEN '18-34' THEN 2
-        WHEN '35-49' THEN 3
-        WHEN '50-64' THEN 4
-        WHEN '65-79' THEN 5
-        WHEN '80+' THEN 6
-    END
+WHERE d.GENDER IS NOT NULL
+GROUP BY gender
+ORDER BY patient_count DESC
 ```
 
 For SITE dimensions (urban_rural, teaching, bed_count) - USE BRIDGE JOIN:
@@ -300,9 +281,9 @@ SELECT
 FROM {cohort_table_quoted} c
 JOIN {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo d 
     ON c.{join_key} = d.{join_key}
-JOIN {config.patient_catalog}.{config.patient_schema}.provider p 
-    ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY)
-WHERE p.location_type IS NOT NULL
+JOIN {config.patient_catalog}.{config.patient_schema}.phd_de_providers p 
+    ON d.PROV_ID = p.PROV_ID
+WHERE p.URBAN_RURAL IS NOT NULL
 GROUP BY location_type
 ORDER BY patient_count DESC
 ```
@@ -319,7 +300,7 @@ CRITICAL Syntax Rules:
 Generate a SQL query following these rules:
 
 1. **Table Selection (CRITICAL):**
-   - If dimension is: age_groups, gender, race, ethnicity, visit_level, admit_source, admit_type
+   - If dimension is: gender, race, ethnicity, visit_level, admit_type, admit_source
      → **MUST use**: {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo
      → Join: ON c.{join_key} = d.{join_key} (use alias 'd' for phd_de_patdemo)
    
@@ -327,8 +308,8 @@ Generate a SQL query following these rules:
      → **MUST use**: {config.patient_catalog}.{config.patient_schema}.provider
      → **CRITICAL**: Use phd_de_patdemo as bridge! Join pattern:
        1. First join: Cohort → phd_de_patdemo (ON c.{join_key} = d.{join_key}, alias 'd')
-       2. Second join: phd_de_patdemo → provider (ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY), alias 'p')
-     → **CRITICAL**: PROVIDER_KEY and PROV_ID mean the same thing - use COALESCE to handle either column name (case-insensitive)
+       2. Second join: phd_de_patdemo → phd_de_providers (ON d.PROV_ID = p.PROV_ID, alias 'p')
+     → **CRITICAL**: Both tables use PROV_ID as the join key
 
 2. **Column Selection (CRITICAL - ONLY USE PROVIDED COLUMNS):**
    - **YOU MUST ONLY USE COLUMNS FROM phd_de_patdemo OR provider TABLES**
@@ -357,7 +338,7 @@ Generate a SQL query following these rules:
    - Handles NULL values: Use COALESCE or IS NOT NULL
 
 ⚠️ CRITICAL: Table and Column Mapping (ONLY USE THESE COLUMNS):
-- **Patient/Visit dimensions** (age_groups, gender, race, ethnicity, visit_level, admit_source, admit_type):
+- **Patient/Visit dimensions** (gender, race, ethnicity, visit_level, admit_type, admit_source):
   * Table: **phd_de_patdemo** (use {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo, alias 'd')
   * **CRITICAL**: phd_de_patdemo IS the encounter table - there is NO separate encounter table
   * The 'patient_key' column in phd_de_patdemo represents an ENCOUNTER/VISIT (not a patient)
@@ -378,13 +359,12 @@ Generate a SQL query following these rules:
 
 ⚠️ CRITICAL: Column naming requirements (must match exactly):
 - Dimension column name (output column in SELECT): 
-  * age_groups → 'age_group' (from d.AGE with CASE statement)
   * gender → 'gender' (from d.GENDER)
   * race → 'race' (from d.race)
   * ethnicity → 'ethnicity' (from d.HISPANIC_IND)
   * visit_level → 'visit_level' (from d.I_O_IND)
-  * admit_source → 'admit_source' (from d.PAT_TYPE)
   * admit_type → 'admit_type' (from d.ADM_TYPE)
+  * admit_source → 'admit_source' (from d.PAT_TYPE)
   * urban_rural → 'location_type' (from p.URBAN_RURAL)
   * teaching → 'teaching_status' (from p.TEACHING with CASE)
   * bed_count → 'bed_count_group' (from p.BEDS_GRP with CASE)
@@ -395,7 +375,7 @@ The visualization code expects these exact column names!
 
 ⚠️ FINAL REMINDER - COLUMN RESTRICTIONS:
 - **ONLY use columns from phd_de_patdemo (alias 'd') or provider (alias 'p')**
-- **For phd_de_patdemo, ONLY use**: AGE, GENDER, race, HISPANIC_IND, I_O_IND, ADM_TYPE, PAT_TYPE, PAT_KEY, MEDREC_KEY, PROV_ID, PROVIDER_KEY, DISCHARGE_DATE
+- **For phd_de_patdemo, ONLY use**: GENDER, race, HISPANIC_IND, I_O_IND, ADM_TYPE, PAT_TYPE, PAT_KEY, MEDREC_KEY, PROV_ID, DISCHARGE_DATE
 - **For provider, ONLY use**: URBAN_RURAL, TEACHING, BEDS_GRP, PROV_ID, PROVIDER_KEY
 - **DO NOT use any other column names - they do not exist and will cause "UNRESOLVED COLUMN" errors**
 - **DO NOT reference any 'encounter' table - it does not exist. phd_de_patdemo IS the encounter table.**
@@ -425,19 +405,19 @@ The query must follow Databricks Unity Catalog SQL syntax exactly as shown in th
             expected_tables = dimension_table_mapping.get(dimension_name, [])
             
             # Build allowed columns dictionary for validation
-            # Only allow columns that we've discovered from phd_de_patdemo and provider
+            # Only allow columns that we've discovered from phd_de_patdemo and phd_de_providers
             allowed_columns = {}
             
-            # Standard allowed columns for phd_de_patdemo (always available)
-            patdemo_standard_cols = ['AGE', 'GENDER', 'race', 'HISPANIC_IND', 'I_O_IND', 'ADM_TYPE', 'PAT_TYPE', 
-                                     'PAT_KEY', 'MEDREC_KEY', 'PROV_ID', 'PROVIDER_KEY', 'DISCHARGE_DATE']
+            # Standard allowed columns for phd_de_patdemo (only the 9 dimensions we support)
+            patdemo_standard_cols = ['GENDER', 'race', 'HISPANIC_IND', 'I_O_IND', 'ADM_TYPE', 'PAT_TYPE', 
+                                     'PAT_KEY', 'MEDREC_KEY', 'PROV_ID', 'DISCHARGE_DATE']
             
-            if dimension_name in ['age_groups', 'gender', 'race', 'ethnicity', 'visit_level', 'admit_source', 'admit_type']:
+            if dimension_name in ['gender', 'race', 'ethnicity', 'visit_level', 'admit_type', 'admit_source']:
                 # For patient/visit dimensions, only allow the specific column + standard columns
                 patdemo_cols = patdemo_standard_cols.copy()
                 if exact_columns:
                     # Add discovered exact columns (in case they differ from standard)
-                    for key in ['age_column', 'gender_column', 'race_column', 'ethnicity_column', 
+                    for key in ['gender_column', 'race_column', 'ethnicity_column', 
                                'visit_level_column', 'admit_source_column', 'admit_type_column']:
                         if key in exact_columns:
                             col = exact_columns[key]
@@ -445,11 +425,11 @@ The query must follow Databricks Unity Catalog SQL syntax exactly as shown in th
                                 patdemo_cols.append(col)
                 allowed_columns['phd_de_patdemo'] = patdemo_cols
             
-            # Standard allowed columns for provider
-            provider_standard_cols = ['URBAN_RURAL', 'TEACHING', 'BEDS_GRP', 'PROV_ID', 'PROVIDER_KEY']
+            # Standard allowed columns for phd_de_providers
+            provider_standard_cols = ['URBAN_RURAL', 'TEACHING', 'BEDS_GRP', 'PROV_ID']
             
             if dimension_name in ['urban_rural', 'teaching', 'bed_count']:
-                # For site dimensions, allow provider columns + phd_de_patdemo for bridge
+                # For site dimensions, allow phd_de_providers columns + phd_de_patdemo for bridge
                 provider_cols = provider_standard_cols.copy()
                 if exact_columns:
                     # Add discovered exact columns
@@ -458,10 +438,10 @@ The query must follow Databricks Unity Catalog SQL syntax exactly as shown in th
                             col = exact_columns[key]
                             if col.upper() not in [c.upper() for c in provider_cols]:
                                 provider_cols.append(col)
-                allowed_columns['provider'] = provider_cols
+                allowed_columns['phd_de_providers'] = provider_cols
                 
                 # Also add phd_de_patdemo columns for bridge join (only join keys)
-                bridge_cols = ['PROV_ID', 'PROVIDER_KEY', 'PAT_KEY', 'MEDREC_KEY']
+                bridge_cols = ['PROV_ID', 'PAT_KEY', 'MEDREC_KEY']
                 if exact_columns and 'prov_id_column' in exact_columns:
                     bridge_cols.append(exact_columns['prov_id_column'])
                 allowed_columns['phd_de_patdemo'] = bridge_cols

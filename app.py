@@ -168,8 +168,11 @@ def initialize_services():
             # Pre-discover and cache exact column names for ALL dimensions
             # This ensures the system is "hot" and ready to use immediately
             dimension_names = [
-                'age_groups', 'gender', 'race', 'ethnicity',
-                'visit_level', 'admit_source', 'admit_type',
+                # Patient-level dimensions
+                'gender', 'race', 'ethnicity',
+                # Visit-level dimensions
+                'visit_level', 'admit_type', 'admit_source',
+                # Site-level dimensions
                 'urban_rural', 'teaching', 'bed_count'
             ]
             
@@ -1308,33 +1311,9 @@ def display_dimension_results(results: dict):
     
     # Patient-Level Demographics Section (left to right)
     st.subheader("👥 Patient Demographics")
-    demo_col1, demo_col2, demo_col3, demo_col4 = st.columns(4)
+    demo_col1, demo_col2, demo_col3 = st.columns(3)
     
     with demo_col1:
-        # Age Groups
-        if dimensions.get('age_groups'):
-            age_df = pd.DataFrame(dimensions['age_groups'])
-            if not age_df.empty and 'age_group' in age_df.columns and 'patient_count' in age_df.columns:
-                fig = px.bar(
-                    age_df, 
-                    x='age_group', 
-                    y='patient_count',
-                    title='Age Distribution',
-                    labels={'patient_count': 'Count', 'age_group': 'Age Group'},
-                    color='patient_count',
-                    color_continuous_scale='Blues'
-                )
-                fig.update_layout(height=250, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Age Data", expanded=False):
-                    st.dataframe(age_df, use_container_width=True, hide_index=True)
-            elif not age_df.empty:
-                st.warning(f"Missing columns: {list(age_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
-                    st.dataframe(age_df, use_container_width=True, hide_index=True)
-    
-    with demo_col2:
         # Gender
         if dimensions.get('gender'):
             gender_df = pd.DataFrame(dimensions['gender'])
