@@ -903,74 +903,74 @@ class GenieService:
                             attachment_id = attachment.__dict__['attachment_id']
                         
                         if attachment_id and conversation_id and message_id:
-                        logger.info(f"Found attachment_id: {attachment_id}. Fetching query results via separate API call...")
-                        try:
-                            # Get the query result response (contains statement_id)
-                            query_result_response = self.w.genie.get_message_attachment_query_result(
-                                space_id=self.space_id,
-                                conversation_id=conversation_id,
-                                message_id=message_id,
-                                attachment_id=attachment_id
-                            )
-                            
-                            logger.info(f"Query result response type: {type(query_result_response)}")
-                            logger.info(f"Query result response attributes: {[a for a in dir(query_result_response) if not a.startswith('_')]}")
-                            
-                            # Extract statement_id from response
-                            statement_id = None
-                            if hasattr(query_result_response, 'statement_id'):
-                                statement_id = query_result_response.statement_id
-                            elif hasattr(query_result_response, '__dict__') and 'statement_id' in query_result_response.__dict__:
-                                statement_id = query_result_response.__dict__['statement_id']
-                            
-                            if statement_id:
-                                logger.info(f"Found statement_id: {statement_id}. Fetching statement execution result...")
-                                # Get the actual statement execution result with data
-                                statement_result = self.w.statement_execution.get_statement(statement_id)
+                            logger.info(f"Found attachment_id: {attachment_id}. Fetching query results via separate API call...")
+                            try:
+                                # Get the query result response (contains statement_id)
+                                query_result_response = self.w.genie.get_message_attachment_query_result(
+                                    space_id=self.space_id,
+                                    conversation_id=conversation_id,
+                                    message_id=message_id,
+                                    attachment_id=attachment_id
+                                )
                                 
-                                logger.info(f"Statement result type: {type(statement_result)}")
-                                logger.info(f"Statement result attributes: {[a for a in dir(statement_result) if not a.startswith('_')]}")
+                                logger.info(f"Query result response type: {type(query_result_response)}")
+                                logger.info(f"Query result response attributes: {[a for a in dir(query_result_response) if not a.startswith('_')]}")
                                 
-                                # Extract data from statement result
-                                if hasattr(statement_result, 'result') and statement_result.result:
-                                    stmt_result = statement_result.result
-                                    if hasattr(stmt_result, 'data_array'):
-                                        data_array = stmt_result.data_array
-                                        if data_array:
-                                            result['data'] = list(data_array) if hasattr(data_array, '__iter__') else [data_array]
-                                            result['row_count'] = len(result['data'])
-                                            logger.info(f"Extracted {result['row_count']} rows from statement result data_array")
+                                # Extract statement_id from response
+                                statement_id = None
+                                if hasattr(query_result_response, 'statement_id'):
+                                    statement_id = query_result_response.statement_id
+                                elif hasattr(query_result_response, '__dict__') and 'statement_id' in query_result_response.__dict__:
+                                    statement_id = query_result_response.__dict__['statement_id']
+                                
+                                if statement_id:
+                                    logger.info(f"Found statement_id: {statement_id}. Fetching statement execution result...")
+                                    # Get the actual statement execution result with data
+                                    statement_result = self.w.statement_execution.get_statement(statement_id)
                                     
-                                    # Also check for row_count in statement result
-                                    if hasattr(stmt_result, 'row_count'):
-                                        stmt_row_count = stmt_result.row_count
-                                        if stmt_row_count and stmt_row_count > result.get('row_count', 0):
-                                            result['row_count'] = stmt_row_count
-                                            logger.info(f"Updated row_count from statement result: {result['row_count']}")
-                                
-                                # If we still don't have data, check statement_result directly
-                                if not result.get('data'):
-                                    if hasattr(statement_result, 'data_array'):
-                                        data_array = statement_result.data_array
-                                        if data_array:
-                                            result['data'] = list(data_array) if hasattr(data_array, '__iter__') else [data_array]
-                                            result['row_count'] = len(result['data'])
-                                            logger.info(f"Extracted {result['row_count']} rows from statement_result.data_array")
-                                
-                                # Get column names if available (for better DataFrame display)
-                                if hasattr(statement_result, 'manifest') and statement_result.manifest:
-                                    if hasattr(statement_result.manifest, 'schema') and statement_result.manifest.schema:
-                                        if hasattr(statement_result.manifest.schema, 'columns'):
-                                            columns = statement_result.manifest.schema.columns
-                                            if columns:
-                                                # Store column names for later use
-                                                result['columns'] = [col.name if hasattr(col, 'name') else str(col) for col in columns]
-                                                logger.info(f"Extracted {len(result['columns'])} column names from manifest")
-                            else:
-                                logger.warning(f"Could not extract statement_id from query_result_response")
-                        except Exception as e:
-                            logger.warning(f"Could not fetch query results via get_message_attachment_query_result: {e}. Will try other methods.")
-                            # Continue to try other extraction methods below
+                                    logger.info(f"Statement result type: {type(statement_result)}")
+                                    logger.info(f"Statement result attributes: {[a for a in dir(statement_result) if not a.startswith('_')]}")
+                                    
+                                    # Extract data from statement result
+                                    if hasattr(statement_result, 'result') and statement_result.result:
+                                        stmt_result = statement_result.result
+                                        if hasattr(stmt_result, 'data_array'):
+                                            data_array = stmt_result.data_array
+                                            if data_array:
+                                                result['data'] = list(data_array) if hasattr(data_array, '__iter__') else [data_array]
+                                                result['row_count'] = len(result['data'])
+                                                logger.info(f"Extracted {result['row_count']} rows from statement result data_array (via attachment_id)")
+                                        
+                                        # Also check for row_count in statement result
+                                        if hasattr(stmt_result, 'row_count'):
+                                            stmt_row_count = stmt_result.row_count
+                                            if stmt_row_count and stmt_row_count > result.get('row_count', 0):
+                                                result['row_count'] = stmt_row_count
+                                                logger.info(f"Updated row_count from statement result: {result['row_count']}")
+                                    
+                                    # If we still don't have data, check statement_result directly
+                                    if not result.get('data'):
+                                        if hasattr(statement_result, 'data_array'):
+                                            data_array = statement_result.data_array
+                                            if data_array:
+                                                result['data'] = list(data_array) if hasattr(data_array, '__iter__') else [data_array]
+                                                result['row_count'] = len(result['data'])
+                                                logger.info(f"Extracted {result['row_count']} rows from statement_result.data_array")
+                                    
+                                    # Get column names if available (for better DataFrame display)
+                                    if hasattr(statement_result, 'manifest') and statement_result.manifest:
+                                        if hasattr(statement_result.manifest, 'schema') and statement_result.manifest.schema:
+                                            if hasattr(statement_result.manifest.schema, 'columns'):
+                                                columns = statement_result.manifest.schema.columns
+                                                if columns:
+                                                    # Store column names for later use
+                                                    result['columns'] = [col.name if hasattr(col, 'name') else str(col) for col in columns]
+                                                    logger.info(f"Extracted {len(result['columns'])} column names from manifest")
+                                else:
+                                    logger.warning(f"Could not extract statement_id from query_result_response")
+                            except Exception as e:
+                                logger.warning(f"Could not fetch query results via get_message_attachment_query_result: {e}. Will try other methods.")
+                                # Continue to try other extraction methods below
                     
                     # Fallback: Try to get result data from query.result (older API format)
                     if not result.get('data') and hasattr(query, 'result') and query.result:
