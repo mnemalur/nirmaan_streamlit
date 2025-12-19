@@ -817,23 +817,50 @@ def render_chat_page():
 
             # Display the actual data if available (limit to 5000 rows max)
             MAX_DISPLAY_ROWS = 5000
+            if data and len(data) > 0:
                 try:
                     # Convert data to DataFrame for better display
                     import pandas as pd
                     # Get column names from genie_result if available
                     columns = genie_result.get("columns")
-                    if columns and len(columns) > 0:
-                        # Use provided column names
-                        df = pd.DataFrame(data, columns=columns)
-                        logger.info(f"Created DataFrame with {len(columns)} columns: {columns[:5]}..." if len(columns) > 5 else f"Created DataFrame with columns: {columns}")
-                    else:
-                        # If no column names, try to infer from data structure
-                        # If data is list of dicts, pandas will use dict keys as columns
-                        # If data is list of lists, we'll use numeric indices (fallback)
-                        df = pd.DataFrame(data)
-                        # Check if columns are numeric indices (0, 1, 2, ...) which indicates missing column names
-                        if len(df.columns) > 0 and all(isinstance(col, int) for col in df.columns):
-                            logger.warning("DataFrame created with numeric column indices. Column names not available from Genie.")
+                    
+                    # Check data structure
+                    if data and len(data) > 0:
+                        first_row = data[0]
+                        is_list_of_dicts = isinstance(first_row, dict)
+                        is_list_of_lists = isinstance(first_row, (list, tuple))
+                        
+                        if columns and len(columns) > 0:
+                            # Use provided column names
+                            if is_list_of_lists:
+                                # Data is list of lists, use columns parameter
+                                df = pd.DataFrame(data, columns=columns)
+                            elif is_list_of_dicts:
+                                # Data is list of dicts, but we have column names - use them to reorder/select
+                                df = pd.DataFrame(data)
+                                # If column names match dict keys, reorder; otherwise use provided columns
+                                if set(columns).issubset(set(df.columns)):
+                                    df = df[columns]
+                                else:
+                                    # Try to create with provided columns (may fail if mismatch)
+                                    df = pd.DataFrame(data, columns=columns)
+                            else:
+                                df = pd.DataFrame(data, columns=columns)
+                            logger.info(f"Created DataFrame with {len(columns)} columns: {columns[:5]}..." if len(columns) > 5 else f"Created DataFrame with columns: {columns}")
+                        else:
+                            # No column names provided - try to infer from data structure
+                            if is_list_of_dicts:
+                                # List of dicts - pandas will use dict keys as column names
+                                df = pd.DataFrame(data)
+                                logger.info(f"Created DataFrame from list of dicts with columns: {list(df.columns)}")
+                            elif is_list_of_lists:
+                                # List of lists - will get numeric indices, which is the problem
+                                df = pd.DataFrame(data)
+                                logger.warning(f"DataFrame created with numeric column indices (0, 1, 2...). Column names not available from Genie. Data shape: {df.shape}")
+                                st.warning("⚠️ Column names not available. Showing numeric indices. This may indicate an issue with Genie response parsing.")
+                            else:
+                                df = pd.DataFrame(data)
+                                logger.warning(f"Unknown data structure type: {type(first_row)}. Created DataFrame with columns: {list(df.columns)}")
                     
                     # Limit to max 5000 rows for display
                     total_rows = len(df)

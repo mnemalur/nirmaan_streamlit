@@ -861,6 +861,23 @@ class GenieService:
                         try:
                             statement_result = self.w.statement_execution.get_statement(statement_id)
                             logger.info(f"Statement result type: {type(statement_result)}")
+                            logger.info(f"Statement result attributes: {[a for a in dir(statement_result) if not a.startswith('_')]}")
+                            
+                            # Try to get as_dict() for inspection if available
+                            try:
+                                if hasattr(statement_result, 'as_dict'):
+                                    result_dict = statement_result.as_dict()
+                                    logger.info(f"Statement result keys (as_dict): {list(result_dict.keys()) if isinstance(result_dict, dict) else 'Not a dict'}")
+                                    if isinstance(result_dict, dict) and 'manifest' in result_dict:
+                                        manifest_dict = result_dict['manifest']
+                                        logger.info(f"Manifest keys: {list(manifest_dict.keys()) if isinstance(manifest_dict, dict) else 'Not a dict'}")
+                                        if isinstance(manifest_dict, dict) and 'schema' in manifest_dict:
+                                            schema_dict = manifest_dict['schema']
+                                            logger.info(f"Schema keys: {list(schema_dict.keys()) if isinstance(schema_dict, dict) else 'Not a dict'}")
+                                            if isinstance(schema_dict, dict) and 'columns' in schema_dict:
+                                                logger.info(f"Found columns in dict! Count: {len(schema_dict['columns']) if isinstance(schema_dict['columns'], list) else 'N/A'}")
+                            except Exception as e:
+                                logger.debug(f"Could not inspect as_dict: {e}")
                             
                             # Extract data from statement result
                             if hasattr(statement_result, 'result') and statement_result.result:
@@ -881,14 +898,90 @@ class GenieService:
                                         result['row_count'] = stmt_row_count
                                         logger.info(f"Updated row_count from statement result: {result['row_count']}")
                             
-                            # Get column names if available
+                            # Get column names if available - try multiple paths
+                            logger.info("Attempting to extract column names from statement_result...")
+                            columns_extracted = False
+                            
+                            # Path 1: manifest.schema.columns
                             if hasattr(statement_result, 'manifest') and statement_result.manifest:
+                                logger.info(f"Found manifest, type: {type(statement_result.manifest)}")
+                                logger.info(f"Manifest attributes: {[a for a in dir(statement_result.manifest) if not a.startswith('_')]}")
                                 if hasattr(statement_result.manifest, 'schema') and statement_result.manifest.schema:
+                                    logger.info(f"Found schema, type: {type(statement_result.manifest.schema)}")
+                                    logger.info(f"Schema attributes: {[a for a in dir(statement_result.manifest.schema) if not a.startswith('_')]}")
                                     if hasattr(statement_result.manifest.schema, 'columns'):
                                         columns = statement_result.manifest.schema.columns
+                                        logger.info(f"Found columns, type: {type(columns)}, length: {len(columns) if hasattr(columns, '__len__') else 'N/A'}")
                                         if columns:
+                                            try:
+                                                result['columns'] = [col.name if hasattr(col, 'name') else str(col) for col in columns]
+                                                logger.info(f"✅ Extracted {len(result['columns'])} column names from manifest.schema.columns: {result['columns']}")
+                                                columns_extracted = True
+                                            except Exception as e:
+                                                logger.warning(f"Error extracting column names from columns list: {e}")
+                            
+                            # Path 2: Check if columns are in result directly
+                            if not columns_extracted and hasattr(statement_result, 'result') and statement_result.result:
+                                stmt_result = statement_result.result
+                                if hasattr(stmt_result, 'columns'):
+                                    columns = stmt_result.columns
+                                    if columns:
+                                        try:
                                             result['columns'] = [col.name if hasattr(col, 'name') else str(col) for col in columns]
-                                            logger.info(f"Extracted {len(result['columns'])} column names from manifest")
+                                            logger.info(f"✅ Extracted {len(result['columns'])} column names from result.columns: {result['columns']}")
+                                            columns_extracted = True
+                                        except Exception as e:
+                                            logger.warning(f"Error extracting from result.columns: {e}")
+                            
+                            # Path 3: Check manifest.columns directly
+                            if not columns_extracted and hasattr(statement_result, 'manifest') and statement_result.manifest:
+                                if hasattr(statement_result.manifest, 'columns'):
+                                    columns = statement_result.manifest.columns
+                                    if columns:
+                                        try:
+                                            result['columns'] = [col.name if hasattr(col, 'name') else str(col) for col in columns]
+                                            logger.info(f"✅ Extracted {len(result['columns'])} column names from manifest.columns: {result['columns']}")
+                                            columns_extracted = True
+                                        except Exception as e:
+                                            logger.warning(f"Error extracting from manifest.columns: {e}")
+                            
+                            # Path 4: Try extracting from as_dict() if available
+                            if not columns_extracted:
+                                try:
+                                    if hasattr(statement_result, 'as_dict'):
+                                        result_dict = statement_result.as_dict()
+                                        if isinstance(result_dict, dict):
+                                            manifest = result_dict.get('manifest', {})
+                                            if isinstance(manifest, dict):
+                                                schema = manifest.get('schema', {})
+                                                if isinstance(schema, dict):
+                                                    columns_list = schema.get('columns', [])
+                                                    if columns_list and isinstance(columns_list, list):
+                                                        # Extract column names from dict structure
+                                                        column_names = []
+                                                        for col in columns_list:
+                                                            if isinstance(col, dict):
+                                                                col_name = col.get('name') or col.get('column_name')
+                                                                if col_name:
+                                                                    column_names.append(col_name)
+                                                            elif hasattr(col, 'name'):
+                                                                column_names.append(col.name)
+                                                            else:
+                                                                column_names.append(str(col))
+                                                        if column_names:
+                                                            result['columns'] = column_names
+                                                            logger.info(f"✅ Extracted {len(result['columns'])} column names from as_dict() structure: {result['columns']}")
+                                                            columns_extracted = True
+                                except Exception as e:
+                                    logger.debug(f"Error extracting from as_dict(): {e}")
+                            
+                            if not columns_extracted:
+                                logger.warning("⚠️ Could not extract column names from statement_result. Available attributes:")
+                                logger.warning(f"  statement_result attributes: {[a for a in dir(statement_result) if not a.startswith('_')]}")
+                                if hasattr(statement_result, 'manifest'):
+                                    logger.warning(f"  manifest attributes: {[a for a in dir(statement_result.manifest) if not a.startswith('_')]}")
+                                    if hasattr(statement_result.manifest, 'schema'):
+                                        logger.warning(f"  schema attributes: {[a for a in dir(statement_result.manifest.schema) if not a.startswith('_')]}")
                         except Exception as e:
                             logger.warning(f"Could not fetch statement result directly via statement_id: {e}. Will try attachment_id method.")
                     
@@ -931,6 +1024,26 @@ class GenieService:
                                     logger.info(f"Statement result type: {type(statement_result)}")
                                     logger.info(f"Statement result attributes: {[a for a in dir(statement_result) if not a.startswith('_')]}")
                                     
+                                    # Try to get as_dict() for inspection if available
+                                    try:
+                                        if hasattr(statement_result, 'as_dict'):
+                                            result_dict = statement_result.as_dict()
+                                            logger.info(f"Statement result keys (as_dict): {list(result_dict.keys()) if isinstance(result_dict, dict) else 'Not a dict'}")
+                                            if isinstance(result_dict, dict) and 'manifest' in result_dict:
+                                                manifest_dict = result_dict['manifest']
+                                                logger.info(f"Manifest keys: {list(manifest_dict.keys()) if isinstance(manifest_dict, dict) else 'Not a dict'}")
+                                                if isinstance(manifest_dict, dict) and 'schema' in manifest_dict:
+                                                    schema_dict = manifest_dict['schema']
+                                                    logger.info(f"Schema keys: {list(schema_dict.keys()) if isinstance(schema_dict, dict) else 'Not a dict'}")
+                                                    if isinstance(schema_dict, dict) and 'columns' in schema_dict:
+                                                        logger.info(f"Found columns in dict! Count: {len(schema_dict['columns']) if isinstance(schema_dict['columns'], list) else 'N/A'}")
+                                                        # Try to extract column names from dict structure
+                                                        if isinstance(schema_dict['columns'], list) and len(schema_dict['columns']) > 0:
+                                                            first_col = schema_dict['columns'][0]
+                                                            logger.info(f"First column structure: {type(first_col)}, keys: {list(first_col.keys()) if isinstance(first_col, dict) else 'N/A'}")
+                                    except Exception as e:
+                                        logger.debug(f"Could not inspect as_dict: {e}")
+                                    
                                     # Extract data from statement result
                                     if hasattr(statement_result, 'result') and statement_result.result:
                                         stmt_result = statement_result.result
@@ -957,15 +1070,83 @@ class GenieService:
                                                 result['row_count'] = len(result['data'])
                                                 logger.info(f"Extracted {result['row_count']} rows from statement_result.data_array")
                                     
-                                    # Get column names if available (for better DataFrame display)
+                                    # Get column names if available (for better DataFrame display) - try multiple paths
+                                    logger.info("Attempting to extract column names from statement_result (via attachment_id)...")
+                                    columns_extracted = False
+                                    
+                                    # Path 1: manifest.schema.columns
                                     if hasattr(statement_result, 'manifest') and statement_result.manifest:
+                                        logger.info(f"Found manifest, type: {type(statement_result.manifest)}")
                                         if hasattr(statement_result.manifest, 'schema') and statement_result.manifest.schema:
+                                            logger.info(f"Found schema, type: {type(statement_result.manifest.schema)}")
                                             if hasattr(statement_result.manifest.schema, 'columns'):
                                                 columns = statement_result.manifest.schema.columns
+                                                logger.info(f"Found columns, type: {type(columns)}, length: {len(columns) if hasattr(columns, '__len__') else 'N/A'}")
                                                 if columns:
-                                                    # Store column names for later use
+                                                    try:
+                                                        result['columns'] = [col.name if hasattr(col, 'name') else str(col) for col in columns]
+                                                        logger.info(f"✅ Extracted {len(result['columns'])} column names from manifest.schema.columns: {result['columns']}")
+                                                        columns_extracted = True
+                                                    except Exception as e:
+                                                        logger.warning(f"Error extracting column names: {e}")
+                                    
+                                    # Path 2: Check result.columns
+                                    if not columns_extracted and hasattr(statement_result, 'result') and statement_result.result:
+                                        stmt_result = statement_result.result
+                                        if hasattr(stmt_result, 'columns'):
+                                            columns = stmt_result.columns
+                                            if columns:
+                                                try:
                                                     result['columns'] = [col.name if hasattr(col, 'name') else str(col) for col in columns]
-                                                    logger.info(f"Extracted {len(result['columns'])} column names from manifest")
+                                                    logger.info(f"✅ Extracted {len(result['columns'])} column names from result.columns: {result['columns']}")
+                                                    columns_extracted = True
+                                                except Exception as e:
+                                                    logger.warning(f"Error extracting from result.columns: {e}")
+                                    
+                                    # Path 3: Check manifest.columns directly
+                                    if not columns_extracted and hasattr(statement_result, 'manifest') and statement_result.manifest:
+                                        if hasattr(statement_result.manifest, 'columns'):
+                                            columns = statement_result.manifest.columns
+                                            if columns:
+                                                try:
+                                                    result['columns'] = [col.name if hasattr(col, 'name') else str(col) for col in columns]
+                                                    logger.info(f"✅ Extracted {len(result['columns'])} column names from manifest.columns: {result['columns']}")
+                                                    columns_extracted = True
+                                                except Exception as e:
+                                                    logger.warning(f"Error extracting from manifest.columns: {e}")
+                                    
+                                    # Path 4: Try extracting from as_dict() if available
+                                    if not columns_extracted:
+                                        try:
+                                            if hasattr(statement_result, 'as_dict'):
+                                                result_dict = statement_result.as_dict()
+                                                if isinstance(result_dict, dict):
+                                                    manifest = result_dict.get('manifest', {})
+                                                    if isinstance(manifest, dict):
+                                                        schema = manifest.get('schema', {})
+                                                        if isinstance(schema, dict):
+                                                            columns_list = schema.get('columns', [])
+                                                            if columns_list and isinstance(columns_list, list):
+                                                                # Extract column names from dict structure
+                                                                column_names = []
+                                                                for col in columns_list:
+                                                                    if isinstance(col, dict):
+                                                                        col_name = col.get('name') or col.get('column_name')
+                                                                        if col_name:
+                                                                            column_names.append(col_name)
+                                                                    elif hasattr(col, 'name'):
+                                                                        column_names.append(col.name)
+                                                                    else:
+                                                                        column_names.append(str(col))
+                                                                if column_names:
+                                                                    result['columns'] = column_names
+                                                                    logger.info(f"✅ Extracted {len(result['columns'])} column names from as_dict() structure (via attachment_id): {result['columns']}")
+                                                                    columns_extracted = True
+                                        except Exception as e:
+                                            logger.debug(f"Error extracting from as_dict() (via attachment_id): {e}")
+                                    
+                                    if not columns_extracted:
+                                        logger.warning("⚠️ Could not extract column names from statement_result (via attachment_id)")
                                 else:
                                     logger.warning(f"Could not extract statement_id from query_result_response")
                             except Exception as e:
