@@ -818,28 +818,31 @@ def render_chat_page():
                             st.session_state.selected_codes = selected_codes
                             logger.info(f"Selected {len(selected_codes)} codes via 'Use all'")
                 else:
-                    # Customize mode - show expanders for each condition
+                    # Customize mode - show code selection without nested expanders
                     for idx, (cond, cond_codes) in enumerate(grouped.items()):
-                        with st.expander(f"📋 {cond} ({len(cond_codes)} codes)", expanded=(len(grouped) == 1)):
-                            code_df = pd.DataFrame(cond_codes)
-                            display_cols = ['code', 'description', 'vocabulary']
-                            available_cols = [col for col in display_cols if col in code_df.columns]
-                            st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                        st.markdown(f"### 📋 {cond} ({len(cond_codes)} codes)")
+                        code_df = pd.DataFrame(cond_codes)
+                        display_cols = ['code', 'description', 'vocabulary']
+                        available_cols = [col for col in display_cols if col in code_df.columns]
+                        st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
 
-                            label_to_code = {
-                                f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
-                                for c in cond_codes
-                            }
-                            options = list(label_to_code.keys())
+                        label_to_code = {
+                            f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
+                            for c in cond_codes
+                        }
+                        options = list(label_to_code.keys())
 
-                            selected_labels = st.multiselect(
-                                f"Select codes for {cond}:",
-                                options=options,
-                                key=f"codes_select_{idx}",
-                            )
+                        selected_labels = st.multiselect(
+                            f"Select codes for {cond}:",
+                            options=options,
+                            key=f"codes_select_{idx}",
+                        )
 
-                            for label in selected_labels:
-                                selected_codes.append(label_to_code[label])
+                        for label in selected_labels:
+                            selected_codes.append(label_to_code[label])
+                        
+                        if idx < len(grouped) - 1:
+                            st.markdown("---")  # Separator between conditions
 
                 # Always update session state
                 st.session_state.selected_codes = selected_codes
@@ -888,37 +891,37 @@ def render_chat_page():
         row_count = genie_result.get("row_count", 0)
         exec_time = genie_result.get("execution_time")
 
-        # Show SQL outside the results expander to avoid nesting
+        # Compact Step 4: Show summary and data in a compact way
+        st.markdown("### 📊 Step 4: Query Results")
+        
+        # Show SQL in compact expander
         if sql:
-            with st.expander("📝 Generated SQL", expanded=False):
+            with st.expander("📝 View Generated SQL", expanded=False):
                 st.code(sql, language="sql")
         
-        with st.expander("📊 Step 4: Query Results", expanded=True):
-
+        # Compact results summary
+        result_summary_col1, result_summary_col2 = st.columns([3, 1])
+        with result_summary_col1:
             # Display row count with clear messaging
             if row_count is not None and row_count > 0:
                 if data and len(data) > 0:
                     if len(data) < row_count:
-                        st.info(
-                            f"📊 **Total Results:** {row_count:,} row(s) | "
-                            f"**Displayed:** {len(data):,} row(s) "
-                            f"(showing up to {min(len(data), 5000):,} rows in table below)"
-                        )
+                        st.info(f"📊 **{row_count:,} total rows** | Showing {len(data):,} rows (max 5,000)")
                     else:
-                        st.info(
-                            f"📊 **Results:** {row_count:,} row(s) "
-                            f"(showing up to {min(len(data), 5000):,} rows in table below)"
-                        )
+                        st.info(f"📊 **{row_count:,} rows** (showing up to 5,000)")
                 else:
-                    st.info(f"📊 **Total Results:** {row_count:,} row(s) (data array not available - may be truncated)")
+                    st.info(f"📊 **{row_count:,} total rows** (data may be truncated)")
             elif data and len(data) > 0:
-                st.info(f"📊 **Results:** {len(data):,} row(s) (showing up to {min(len(data), 5000):,} rows in table below)")
+                st.info(f"📊 **{len(data):,} rows** (showing up to 5,000)")
             elif row_count == 0:
-                st.info("📊 **Results:** 0 row(s) - No patients match this criteria")
-
-            # Display execution time
+                st.info("📊 **0 rows** - No patients match this criteria")
+        
+        with result_summary_col2:
             if exec_time is not None:
-                st.caption(f"⏱️ Query execution time: {exec_time}")
+                st.caption(f"⏱️ {exec_time}")
+        
+        # Compact data display in expander
+        with st.expander("📋 View Data Table", expanded=False):
 
             # Display the actual data if available (limit to 5000 rows max)
             MAX_DISPLAY_ROWS = 5000
@@ -1024,17 +1027,13 @@ def render_chat_page():
                         )
                     
                     # Display the data (already limited to MAX_DISPLAY_ROWS)
-                    # Note: st.dataframe should preserve column names, but let's verify
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
                     
                     # Log after display (though this won't help if st.dataframe modifies it)
                     logger.info(f"🔍 DEBUG: DataFrame columns after st.dataframe call (should be unchanged): {list(display_df.columns)}")
                     
-                    # Show summary statistics if numeric columns exist
-                    numeric_cols = display_df.select_dtypes(include=['number']).columns
-                    if len(numeric_cols) > 0:
-                        st.markdown("**📈 Summary Statistics**")
-                        st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
+                    # Store display_df for summary statistics (outside expander to avoid nesting)
+                    st.session_state._last_display_df = display_df
                 except Exception as e:
                     # If DataFrame conversion fails, show raw data (but still limit)
                     logger.warning(f"Could not convert Genie data to DataFrame: {e}")
@@ -1051,6 +1050,79 @@ def render_chat_page():
                     f"- Data extraction encountered an issue\n\n"
                     f"You can use the generated SQL above to query the full dataset directly."
                 )
+        
+        # Show summary statistics outside data table expander (to avoid nesting)
+        if hasattr(st.session_state, '_last_display_df'):
+            display_df = st.session_state._last_display_df
+            numeric_cols = display_df.select_dtypes(include=['number']).columns
+            if len(numeric_cols) > 0:
+                with st.expander("📈 Summary Statistics", expanded=False):
+                    st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
+    
+    # Step 5: Dimension Analysis (separate section, not nested in Step 4)
+    cohort_table_info = st.session_state.get("cohort_table_info")
+    dimension_results = st.session_state.get("dimension_results")
+    dimension_analyzing = st.session_state.get("dimension_analyzing", False)
+    
+    if genie_result and (cohort_table_info or dimension_results or dimension_analyzing or st.session_state.get("cohort_table_creating")):
+        st.markdown("---")
+        st.markdown("### 📊 Step 5: Cohort Dimension Analysis")
+        
+        if cohort_table_info:
+            # Table already created, ready for dimension analysis
+            if dimension_results:
+                # Show dimension analysis results in compact grid layout
+                display_dimension_results_compact(dimension_results)
+            elif dimension_analyzing:
+                with st.spinner("Analyzing cohort dimensions... This may take a minute."):
+                    # This will be handled by the button click handler
+                    pass
+            else:
+                st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
+                if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
+                    st.session_state.dimension_analyzing = True
+                    st.rerun()
+        elif st.session_state.get("cohort_table_creating"):
+            # Creating table in background
+            with st.spinner("Preparing dimension analysis..."):
+                create_cohort_table_from_genie_sql()
+                st.rerun()
+        elif st.session_state.get("cohort_table_error"):
+            st.error(f"❌ {st.session_state.cohort_table_error}")
+            if st.button("🔄 Retry", use_container_width=True):
+                st.session_state.cohort_table_error = None
+                st.session_state.cohort_table_creating = True
+                st.rerun()
+        else:
+            # Auto-create table when user clicks to analyze dimensions
+            if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
+                st.session_state.cohort_table_creating = True
+                st.rerun()
+        
+        # Handle dimension analysis execution
+        if st.session_state.get("dimension_analyzing"):
+            try:
+                cohort_table = cohort_table_info.get('cohort_table')
+                has_medrec = cohort_table_info.get('has_medrec_key', False)
+                
+                if cohort_table and hasattr(st.session_state, 'dimension_service'):
+                    with st.spinner("Discovering schema and generating dimension queries in parallel..."):
+                        # Use dynamic mode: schema discovery + LLM-generated SQL (parallel)
+                        results = st.session_state.dimension_service.analyze_dimensions(
+                            cohort_table=cohort_table,
+                            has_medrec_key=has_medrec,
+                            use_dynamic=True  # Enable dynamic schema-based generation
+                        )
+                        st.session_state.dimension_results = results
+                        st.session_state.dimension_analyzing = False
+                        st.rerun()
+                else:
+                    st.error("Cannot analyze dimensions: cohort table information missing")
+                    st.session_state.dimension_analyzing = False
+            except Exception as e:
+                st.error(f"Error analyzing dimensions: {str(e)}")
+                logger.error(f"Dimension analysis error: {str(e)}", exc_info=True)
+                st.session_state.dimension_analyzing = False
             
             # Dimension Analysis (cohort table created automatically in background)
             st.markdown("---")
@@ -1254,9 +1326,9 @@ def process_query(query: str):
                 })
 
 
-def display_dimension_results(results: dict):
+def display_dimension_results_compact(results: dict):
     """
-    Display dimension analysis results with visualizations
+    Display dimension analysis results with visualizations in a compact grid layout
     
     Args:
         results: Dictionary with 'dimensions' (dict of dimension results) and 'errors' (dict of errors)
@@ -1266,48 +1338,202 @@ def display_dimension_results(results: dict):
     generated_queries = results.get('generated_queries', {})
     validation_results = results.get('validation_results', {})
     
-    # Show SQL validation summary
+    # Compact validation summary
     if validation_results:
         valid_count = sum(1 for v in validation_results.values() if v.get('is_valid', False))
         total_count = len(validation_results)
         if valid_count == total_count:
-            st.success(f"✅ All {total_count} dimension SQL queries validated successfully")
+            st.success(f"✅ All {total_count} dimension queries validated")
         else:
-            st.warning(f"⚠️ SQL Validation: {valid_count}/{total_count} queries passed validation")
+            st.warning(f"⚠️ {valid_count}/{total_count} queries validated")
     
-    # Show errors first (outside any expander to avoid nesting)
+    # Show errors compactly
     if errors:
-        st.warning(f"⚠️ Some dimensions failed to load: {', '.join(errors.keys())}")
-        # Show errors inline, not in expander to avoid nesting issues
-        for dim_name, error_msg in errors.items():
-            st.error(f"**{dim_name}**: {error_msg}")
-            # Show SQL if available (inline, not in expander)
-            if dim_name in generated_queries:
-                st.code(generated_queries[dim_name], language='sql')
+        st.warning(f"⚠️ Some dimensions failed: {', '.join(errors.keys())}")
+        with st.expander("🔍 View Errors", expanded=False):
+            for dim_name, error_msg in errors.items():
+                st.error(f"**{dim_name}**: {error_msg}")
+                if dim_name in generated_queries:
+                    st.code(generated_queries[dim_name], language='sql')
     
-    # Show generated SQL queries (separate expander, not nested)
+    # Show SQL queries in expander
     if generated_queries:
-        st.markdown("---")
         with st.expander("🔍 View Generated SQL Queries", expanded=False):
             for dim_name, sql in generated_queries.items():
                 validation = validation_results.get(dim_name, {})
                 is_valid = validation.get('is_valid', False)
-                
-                st.markdown(f"### {dim_name}")
-                if not is_valid:
-                    st.error("❌ Validation Failed")
-                    warnings = validation.get('warnings', [])
-                    for warning in warnings:
-                        st.warning(warning)
-                else:
-                    st.success("✅ Validated")
-                
+                st.markdown(f"**{dim_name}** {'✅' if is_valid else '❌'}")
                 st.code(sql, language='sql')
                 st.markdown("---")
     
     if not dimensions or all(not v for v in dimensions.values()):
         st.info("No dimension data available")
         return
+    
+    # Display all charts in a compact grid layout (3-4 rows)
+    # Row 1: Patient Demographics (3 charts)
+    st.markdown("#### 👥 Patient Demographics")
+    demo_col1, demo_col2, demo_col3 = st.columns(3)
+    
+    with demo_col1:
+        if dimensions.get('gender'):
+            gender_df = pd.DataFrame(dimensions['gender'])
+            if not gender_df.empty and 'gender' in gender_df.columns and 'patient_count' in gender_df.columns:
+                fig = go.Figure(data=[go.Pie(labels=gender_df['gender'], values=gender_df['patient_count'], hole=0.4)])
+                fig.update_layout(title='Gender', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
+                st.plotly_chart(fig, use_container_width=True)
+    
+    with demo_col2:
+        if dimensions.get('race'):
+            race_df = pd.DataFrame(dimensions['race'])
+            if not race_df.empty and 'race' in race_df.columns and 'patient_count' in race_df.columns:
+                fig = px.bar(race_df.head(8), x='race', y='patient_count', title='Race (Top 8)', 
+                           labels={'patient_count': 'Count', 'race': 'Race'}, color='patient_count', color_continuous_scale='Greens')
+                fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig, use_container_width=True)
+    
+    with demo_col3:
+        if dimensions.get('ethnicity'):
+            ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
+            if not ethnicity_df.empty and 'ethnicity' in ethnicity_df.columns and 'patient_count' in ethnicity_df.columns:
+                fig = go.Figure(data=[go.Pie(labels=ethnicity_df['ethnicity'], values=ethnicity_df['patient_count'], hole=0.4)])
+                fig.update_layout(title='Ethnicity', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
+                st.plotly_chart(fig, use_container_width=True)
+    
+    # Row 2: Visit Characteristics (3 charts)
+    st.markdown("#### 🏥 Visit Characteristics")
+    visit_col1, visit_col2, visit_col3 = st.columns(3)
+    
+    with visit_col1:
+        if dimensions.get('visit_level'):
+            visit_df = pd.DataFrame(dimensions['visit_level'])
+            if not visit_df.empty and 'visit_level' in visit_df.columns and 'encounter_count' in visit_df.columns:
+                fig = px.bar(visit_df, x='visit_level', y='encounter_count', title='Visit Level',
+                           labels={'encounter_count': 'Count', 'visit_level': 'Visit Level'}, color='encounter_count', color_continuous_scale='Purples')
+                fig.update_layout(height=200, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig, use_container_width=True)
+    
+    with visit_col2:
+        if dimensions.get('admit_type'):
+            admit_type_df = pd.DataFrame(dimensions['admit_type'])
+            if not admit_type_df.empty and 'admit_type' in admit_type_df.columns and 'encounter_count' in admit_type_df.columns:
+                fig = px.bar(admit_type_df, x='admit_type', y='encounter_count', title='Admit Type',
+                           labels={'encounter_count': 'Count', 'admit_type': 'Admit Type'}, color='encounter_count', color_continuous_scale='Reds')
+                fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig, use_container_width=True)
+    
+    with visit_col3:
+        if dimensions.get('admit_source'):
+            admit_source_df = pd.DataFrame(dimensions['admit_source'])
+            if not admit_source_df.empty and 'admit_source' in admit_source_df.columns and 'encounter_count' in admit_source_df.columns:
+                fig = px.bar(admit_source_df.head(8), x='admit_source', y='encounter_count', title='Admit Source (Top 8)',
+                           labels={'encounter_count': 'Count', 'admit_source': 'Admit Source'}, color='encounter_count', color_continuous_scale='Oranges')
+                fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig, use_container_width=True)
+    
+    # Row 3: Site Characteristics (3 charts)
+    st.markdown("#### 🏛️ Site Characteristics")
+    site_col1, site_col2, site_col3 = st.columns(3)
+    
+    with site_col1:
+        if dimensions.get('urban_rural'):
+            urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
+            if not urban_rural_df.empty and 'location_type' in urban_rural_df.columns and 'patient_count' in urban_rural_df.columns:
+                fig = go.Figure(data=[go.Pie(labels=urban_rural_df['location_type'], values=urban_rural_df['patient_count'], hole=0.4)])
+                fig.update_layout(title='Urban/Rural', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
+                st.plotly_chart(fig, use_container_width=True)
+    
+    with site_col2:
+        if dimensions.get('teaching'):
+            teaching_df = pd.DataFrame(dimensions['teaching'])
+            if not teaching_df.empty and 'teaching_status' in teaching_df.columns and 'patient_count' in teaching_df.columns:
+                fig = go.Figure(data=[go.Pie(labels=teaching_df['teaching_status'], values=teaching_df['patient_count'], hole=0.4)])
+                fig.update_layout(title='Teaching Status', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
+                st.plotly_chart(fig, use_container_width=True)
+    
+    with site_col3:
+        if dimensions.get('bed_count'):
+            bed_count_df = pd.DataFrame(dimensions['bed_count'])
+            if not bed_count_df.empty and 'bed_count_group' in bed_count_df.columns and 'patient_count' in bed_count_df.columns:
+                fig = px.bar(bed_count_df, x='bed_count_group', y='patient_count', title='Bed Count Groups',
+                           labels={'patient_count': 'Count', 'bed_count_group': 'Bed Count'}, color='patient_count', color_continuous_scale='Teal')
+                fig.update_layout(height=200, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig, use_container_width=True)
+    
+    # Data tables in a single expander
+    st.markdown("---")
+    with st.expander("📊 View All Dimension Data Tables", expanded=False):
+        data_tabs = st.tabs(["Patient Demographics", "Visit Characteristics", "Site Characteristics"])
+        
+        with data_tabs[0]:
+            data_col1, data_col2, data_col3 = st.columns(3)
+            with data_col1:
+                if dimensions.get('gender'):
+                    gender_df = pd.DataFrame(dimensions['gender'])
+                    if not gender_df.empty:
+                        st.markdown("**Gender**")
+                        st.dataframe(gender_df, use_container_width=True, hide_index=True)
+            with data_col2:
+                if dimensions.get('race'):
+                    race_df = pd.DataFrame(dimensions['race'])
+                    if not race_df.empty:
+                        st.markdown("**Race**")
+                        st.dataframe(race_df, use_container_width=True, hide_index=True)
+            with data_col3:
+                if dimensions.get('ethnicity'):
+                    ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
+                    if not ethnicity_df.empty:
+                        st.markdown("**Ethnicity**")
+                        st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
+        
+        with data_tabs[1]:
+            data_col1, data_col2, data_col3 = st.columns(3)
+            with data_col1:
+                if dimensions.get('visit_level'):
+                    visit_df = pd.DataFrame(dimensions['visit_level'])
+                    if not visit_df.empty:
+                        st.markdown("**Visit Level**")
+                        st.dataframe(visit_df, use_container_width=True, hide_index=True)
+            with data_col2:
+                if dimensions.get('admit_type'):
+                    admit_type_df = pd.DataFrame(dimensions['admit_type'])
+                    if not admit_type_df.empty:
+                        st.markdown("**Admit Type**")
+                        st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
+            with data_col3:
+                if dimensions.get('admit_source'):
+                    admit_source_df = pd.DataFrame(dimensions['admit_source'])
+                    if not admit_source_df.empty:
+                        st.markdown("**Admit Source**")
+                        st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
+        
+        with data_tabs[2]:
+            data_col1, data_col2, data_col3 = st.columns(3)
+            with data_col1:
+                if dimensions.get('urban_rural'):
+                    urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
+                    if not urban_rural_df.empty:
+                        st.markdown("**Urban/Rural**")
+                        st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
+            with data_col2:
+                if dimensions.get('teaching'):
+                    teaching_df = pd.DataFrame(dimensions['teaching'])
+                    if not teaching_df.empty:
+                        st.markdown("**Teaching Status**")
+                        st.dataframe(teaching_df, use_container_width=True, hide_index=True)
+            with data_col3:
+                if dimensions.get('bed_count'):
+                    bed_count_df = pd.DataFrame(dimensions['bed_count'])
+                    if not bed_count_df.empty:
+                        st.markdown("**Bed Count**")
+                        st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
+
+
+def display_dimension_results(results: dict):
+    """
+    Legacy function - redirects to compact version
+    """
+    display_dimension_results_compact(results)
     
     # Patient-Level Demographics Section (left to right)
     st.subheader("👥 Patient Demographics")
