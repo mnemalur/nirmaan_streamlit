@@ -91,28 +91,20 @@ class DimensionAnalysisService:
         # Detect structure from SQL
         has_medrec, has_patient = self.detect_cohort_structure(genie_sql)
         
-        # Build CREATE TABLE AS SELECT with clustering
-        # Determine cluster columns based on what's in the SQL
-        cluster_by = []
-        if has_medrec:
-            cluster_by.append("medrec_key")
-        if has_patient:
-            cluster_by.append("patient_key")
-        
-        cluster_clause = f"CLUSTER BY ({', '.join(cluster_by)})" if cluster_by else ""
-        
-        create_sql = f"""
-        CREATE OR REPLACE TABLE {cohort_table}
-        USING DELTA
-        {cluster_clause}
-        TBLPROPERTIES (
-            'delta.autoOptimize.optimizeWrite' = 'true',
-            'delta.autoOptimize.autoCompact' = 'true',
-            'delta.deletedFileRetentionDuration' = 'interval 1 days'
+        # Build CREATE TABLE AS SELECT - Databricks SQL syntax
+        # Format: CREATE OR REPLACE TABLE catalog.schema.table USING DELTA TBLPROPERTIES (...) AS SELECT ...
+        # Note: Unity Catalog uses three-part names: catalog.schema.table (no backticks needed)
+        create_sql = (
+            f"CREATE OR REPLACE TABLE {cohort_table}\n"
+            f"USING DELTA\n"
+            f"TBLPROPERTIES (\n"
+            f"  'delta.autoOptimize.optimizeWrite' = 'true',\n"
+            f"  'delta.autoOptimize.autoCompact' = 'true',\n"
+            f"  'delta.deletedFileRetentionDuration' = 'interval 1 days'\n"
+            f")\n"
+            f"AS\n"
+            f"{genie_sql}"
         )
-        AS
-        {genie_sql}
-        """
         
         # Execute table creation
         with connect(
@@ -121,15 +113,38 @@ class DimensionAnalysisService:
             access_token=config.token,
         ) as conn:
             with conn.cursor() as cursor:
+                # Ensure we're using the correct catalog
+                catalog = config.cohort_catalog
+                schema = config.cohort_schema
+                logger.info(f"Using catalog: {catalog}, schema: {schema}")
+                
+                # Set catalog and schema context (if needed)
+                try:
+                    cursor.execute(f"USE CATALOG {catalog}")
+                    cursor.execute(f"USE SCHEMA {schema}")
+                    logger.info(f"Set catalog context to {catalog}.{schema}")
+                except Exception as context_error:
+                    logger.warning(f"Could not set catalog/schema context (may not be needed): {context_error}")
+                
                 logger.info(f"Executing CREATE TABLE AS SELECT for {cohort_table}")
-                logger.debug(f"SQL: {create_sql[:500]}...")  # Log first 500 chars
-                cursor.execute(create_sql)
+                logger.info(f"SQL (first 1000 chars):\n{create_sql[:1000]}...")
+                logger.info(f"Full SQL length: {len(create_sql)} chars")
+                try:
+                    cursor.execute(create_sql)
+                except Exception as sql_error:
+                    logger.error(f"SQL execution error: {sql_error}")
+                    logger.error(f"Error type: {type(sql_error)}")
+                    logger.error(f"Full SQL that failed:\n{create_sql}")
+                    raise
                 
                 # Get count
                 cursor.execute(f"SELECT COUNT(*) as cnt FROM {cohort_table}")
                 count = cursor.fetchone()[0]
                 
                 logger.info(f"Cohort table created: {cohort_table} with {count} rows")
+                
+                # Optionally add clustering after table creation (if supported)
+                # This can be done later if needed for optimization
         
         return {
             'cohort_table': cohort_table,
