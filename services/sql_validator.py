@@ -111,7 +111,8 @@ class SQLValidator:
         sql: str,
         dimension_name: str,
         cohort_table: str,
-        expected_tables: Optional[List[str]] = None
+        expected_tables: Optional[List[str]] = None,
+        allowed_columns: Optional[Dict[str, List[str]]] = None
     ) -> Tuple[bool, List[str], Dict]:
         """
         Validate SQL for a specific dimension type
@@ -180,6 +181,44 @@ class SQLValidator:
         
         warnings.extend(table_validation_warnings)
         
+        # Validate that only allowed columns are used (if provided)
+        column_validation_warnings = []
+        if allowed_columns:
+            # Extract column references from SQL
+            # Look for patterns like: d.COLUMN_NAME, p.COLUMN_NAME, alias.COLUMN_NAME
+            sql_upper = sql.upper()
+            
+            # Pattern to match table alias.column references (e.g., d.AGE, p.URBAN_RURAL)
+            # Also handle backticked columns: d.`AGE`, `d`.`AGE`
+            import re
+            column_refs = re.findall(r'([dpe])\.([A-Z_][A-Z0-9_]*)', sql_upper)
+            
+            for alias, col_name in column_refs:
+                table_name = None
+                if alias == 'd':
+                    table_name = 'phd_de_patdemo'
+                elif alias == 'p':
+                    table_name = 'provider'
+                elif alias == 'e':
+                    column_validation_warnings.append(
+                        f"⚠️ INVALID TABLE: 'encounter' table (alias 'e') does not exist. Use phd_de_patdemo (alias 'd') instead."
+                    )
+                    continue
+                
+                if table_name and table_name in allowed_columns:
+                    allowed_cols = [c.upper() for c in allowed_columns[table_name]]
+                    if col_name not in allowed_cols:
+                        column_validation_warnings.append(
+                            f"⚠️ UNRESOLVED COLUMN: {alias}.{col_name} is not in allowed columns for {table_name}. "
+                            f"Allowed columns: {', '.join(allowed_columns[table_name])}"
+                        )
+                elif table_name:
+                    column_validation_warnings.append(
+                        f"⚠️ UNKNOWN TABLE: Table '{table_name}' not in allowed tables list"
+                    )
+        
+        warnings.extend(column_validation_warnings)
+        
         validation_details = {
             'dimension': dimension_name,
             'has_cohort_table': cohort_table.replace('`', '') in sql.replace('`', ''),
@@ -190,7 +229,7 @@ class SQLValidator:
             'tables_used': list(set(tables_used)),
             'expected_tables': expected_tables or [],
             'warnings': warnings,
-            'is_valid': is_valid and len(table_validation_warnings) == 0
+            'is_valid': is_valid and len(table_validation_warnings) == 0 and len(column_validation_warnings) == 0
         }
         
         return validation_details['is_valid'], warnings, validation_details

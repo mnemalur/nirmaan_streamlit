@@ -485,47 +485,48 @@ class DimensionAnalysisService:
             ORDER BY patient_count DESC
         """
         
-        # 5. Visit Level (Inpatient/Outpatient) - assuming encounter table exists
-        # Note: This may need adjustment based on actual table/column names
+        # 5. Visit Level (Inpatient/Outpatient) - using phd_de_patdemo (I_O_IND column)
+        # NOTE: phd_de_patdemo IS the encounter table - patient_key represents encounters/visits
         queries['visit_level'] = f"""
             SELECT 
-                COALESCE(e.visit_type, e.encounter_type, e.visit_class, 'Unknown') as visit_level,
-                COUNT(DISTINCT e.encounter_id) as encounter_count,
+                COALESCE(d.I_O_IND, 'Unknown') as visit_level,
+                COUNT(DISTINCT d.{patdemo_join_key}) as encounter_count,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.encounter e 
-                ON c.{cohort_join_key} = e.{cohort_join_key}
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.I_O_IND IS NOT NULL
             GROUP BY visit_level
             ORDER BY encounter_count DESC
         """
         
-        # 6. Admit Source
+        # 6. Admit Source - using phd_de_patdemo (PAT_TYPE column)
         queries['admit_source'] = f"""
             SELECT 
-                COALESCE(e.admit_source, 'Unknown') as admit_source,
-                COUNT(DISTINCT e.encounter_id) as encounter_count,
+                COALESCE(d.PAT_TYPE, 'Unknown') as admit_source,
+                COUNT(DISTINCT d.{patdemo_join_key}) as encounter_count,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.encounter e 
-                ON c.{cohort_join_key} = e.{cohort_join_key}
-            WHERE e.admit_source IS NOT NULL
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.PAT_TYPE IS NOT NULL
             GROUP BY admit_source
             ORDER BY encounter_count DESC
         """
         
-        # 7. Admit Type
+        # 7. Admit Type - using phd_de_patdemo (ADM_TYPE column)
         queries['admit_type'] = f"""
             SELECT 
-                COALESCE(e.admit_type, 'Unknown') as admit_type,
-                COUNT(DISTINCT e.encounter_id) as encounter_count,
+                COALESCE(d.ADM_TYPE, 'Unknown') as admit_type,
+                COUNT(DISTINCT d.{patdemo_join_key}) as encounter_count,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.encounter e 
-                ON c.{cohort_join_key} = e.{cohort_join_key}
-            WHERE e.admit_type IS NOT NULL
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.ADM_TYPE IS NOT NULL
             GROUP BY admit_type
             ORDER BY encounter_count DESC
         """
