@@ -550,8 +550,12 @@ def render_config_page():
 
 def render_chat_page():
     """Main chat interface"""
-    st.title("🏥 Clinical Cohort Assistant")
-    st.markdown("Build patient cohorts using natural language queries")
+    # Compact header
+    col_header1, col_header2 = st.columns([3, 1])
+    with col_header1:
+        st.title("🏥 Clinical Cohort Assistant")
+    with col_header2:
+        st.caption("Build patient cohorts using natural language queries")
     
     # Check if services are initialized
     if not st.session_state.services_initialized:
@@ -577,7 +581,9 @@ def render_chat_page():
         return
 
     # Criteria understanding (Milestone 1) – lightweight analysis before the full agent flow
-    with st.expander("🧩 Understand my clinical criteria (Milestone 1)", expanded=True):
+    # Only expand if no analysis exists yet
+    has_analysis = st.session_state.get("criteria_analysis") is not None
+    with st.expander("🧩 Step 1: Enter & Analyze Clinical Criteria", expanded=not has_analysis):
         st.caption(
             "I’ll read your draft criteria, summarize how I understand it, "
             "highlight key clinical concepts, and call out anything that seems ambiguous "
@@ -660,240 +666,217 @@ def render_chat_page():
                 criteria_text_for_codes = st.session_state.get("criteria_text") or ""
                 search_codes_for_criteria(criteria_text_for_codes)
 
-    # If we have attempted a code search, show what we did and let the user choose
-    # how to use the codes.
-    if st.session_state.code_search_text:
-        st.markdown("**Text I used to search for codes**")
-        st.write(st.session_state.code_search_text)
+    # Step 2: Code Selection - Only show if we have codes or errors
+    has_codes = len(st.session_state.get("codes", [])) > 0
+    has_code_error = bool(st.session_state.code_search_error)
+    
+    if has_codes or has_code_error or st.session_state.code_search_text:
+        # Only expand if we're actively working on code selection
+        has_selected = len(st.session_state.get("selected_codes", [])) > 0
+        with st.expander("🔍 Step 2: Select Codes", expanded=(has_codes and not has_selected)):
+            if st.session_state.code_search_text:
+                st.caption(f"**Searched for:** {st.session_state.code_search_text}")
+            
+            if st.session_state.code_search_error:
+                st.error(st.session_state.code_search_error)
+            elif st.session_state.codes:
+                codes = st.session_state.codes
+                
+                # Group codes by condition phrase
+                grouped: dict[str, list[dict]] = {}
+                for c in codes:
+                    cond = c.get("condition") or "Unspecified condition"
+                    grouped.setdefault(cond, []).append(c)
 
-    if st.session_state.code_search_error:
-        st.error(st.session_state.code_search_error)
-    elif st.session_state.codes:
-        codes = st.session_state.codes
+                # Compact summary
+                st.caption(f"Found {len(codes)} code(s) across {len(grouped)} condition(s)")
+                for cond, cond_codes in grouped.items():
+                    st.caption(f"• **{cond}**: {len(cond_codes)} code(s)")
 
-        st.markdown(
-            "I've taken your criteria and, based on the key clinical phrases, "
-            "looked up relevant standard codes across the available vocabularies."
-        )
+                overall_choice = st.radio(
+                    "Code selection method",
+                    ["Use all suggested codes (recommended)", "Customize codes per condition"],
+                    index=0,
+                    horizontal=True,
+                    key="code_selection_choice",
+                    label_visibility="collapsed",
+                )
 
-        # Group codes by condition phrase so multi-condition queries feel organized.
-        grouped: dict[str, list[dict]] = {}
-        for c in codes:
-            cond = c.get("condition") or "Unspecified condition"
-            grouped.setdefault(cond, []).append(c)
+                selected_codes: list[dict] = []
 
-        st.markdown("**Conditions covered and codes found:**")
-        for cond, cond_codes in grouped.items():
-            st.markdown(f"- **{cond}**: {len(cond_codes)} code(s)")
-
-        st.markdown("### How should I use these codes?")
-        overall_choice = st.radio(
-            "Code selection method",
-            ["Use all suggested codes (recommended)", "Customize codes per condition"],
-            index=0,
-            horizontal=True,
-            key="code_selection_choice",
-            label_visibility="collapsed",  # Hide label visually but keep for accessibility
-        )
-
-        selected_codes: list[dict] = []
-
-        if overall_choice.startswith("Use all"):
-            # Simple path: take everything from all conditions, no extra UI.
-            if not grouped:
-                st.warning("No codes were found to select. Please check your vector search results.")
-            else:
-                for cond_codes in grouped.values():
-                    if cond_codes:  # Only extend if there are actually codes
-                        selected_codes.extend(cond_codes)
-                # Immediately persist to session state so it's available even after reruns
-                if selected_codes:
-                    st.session_state.selected_codes = selected_codes
-                    logger.info(f"Selected {len(selected_codes)} codes via 'Use all' from {len(grouped)} condition groups")
+                if overall_choice.startswith("Use all"):
+                    if not grouped:
+                        st.warning("No codes were found to select.")
+                    else:
+                        for cond_codes in grouped.values():
+                            if cond_codes:
+                                selected_codes.extend(cond_codes)
+                        if selected_codes:
+                            st.session_state.selected_codes = selected_codes
+                            logger.info(f"Selected {len(selected_codes)} codes via 'Use all'")
                 else:
-                    logger.warning(f"'Use all' selected but no codes found in grouped dict. Grouped keys: {list(grouped.keys())}")
-        else:
-            st.markdown(
-                "You can fine-tune codes per condition below. By default, nothing is selected; "
-                "pick only the codes you want me to use for each condition."
-            )
+                    # Customize mode - show expanders for each condition
+                    for idx, (cond, cond_codes) in enumerate(grouped.items()):
+                        with st.expander(f"📋 {cond} ({len(cond_codes)} codes)", expanded=(len(grouped) == 1)):
+                            code_df = pd.DataFrame(cond_codes)
+                            display_cols = ['code', 'description', 'vocabulary']
+                            available_cols = [col for col in display_cols if col in code_df.columns]
+                            st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
 
-            # For each condition, show its codes in an expander with a multiselect that
-            # starts empty. This keeps the UI light until the user chooses to customize.
-            for idx, (cond, cond_codes) in enumerate(grouped.items()):
-                with st.expander(f"Codes for: {cond} ({len(cond_codes)} code(s))", expanded=(len(grouped) == 1)):
-                    code_df = pd.DataFrame(cond_codes)
-                    display_cols = ['code', 'description', 'vocabulary']
-                    available_cols = [col for col in display_cols if col in code_df.columns]
-                    st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                            label_to_code = {
+                                f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
+                                for c in cond_codes
+                            }
+                            options = list(label_to_code.keys())
 
-                    label_to_code = {
-                        f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
-                        for c in cond_codes
-                    }
-                    options = list(label_to_code.keys())
+                            selected_labels = st.multiselect(
+                                f"Select codes for {cond}:",
+                                options=options,
+                                key=f"codes_select_{idx}",
+                            )
 
-                    selected_labels = st.multiselect(
-                        f"Codes to use for {cond}:",
-                        options=options,
-                        key=f"codes_select_{idx}",
-                    )
+                            for label in selected_labels:
+                                selected_codes.append(label_to_code[label])
 
-                    for label in selected_labels:
-                        selected_codes.append(label_to_code[label])
+                # Always update session state
+                st.session_state.selected_codes = selected_codes
+                final_selected = st.session_state.get("selected_codes") or selected_codes
+                
+                if final_selected and len(final_selected) > 0:
+                    st.success(f"✅ {len(final_selected)} code(s) selected")
+                    if st.button("➡️ Refine Criteria with Selected Codes", use_container_width=True, type="primary"):
+                        refined_text = refine_criteria_with_codes()
+                        if refined_text:
+                            st.rerun()
+                elif not codes or len(codes) == 0:
+                    st.warning("No codes were found from the vector search.")
+                else:
+                    st.warning("Please select codes above to continue.")
 
-        # Always update session state with what we just computed
-        st.session_state.selected_codes = selected_codes
-
-        # For the UI check, use session state (which persists) but also check local
-        # in case this is the first render after selection
-        final_selected = st.session_state.get("selected_codes") or selected_codes
-        
-        # Debug: show what we have (temporary, can remove later)
-        if not final_selected or len(final_selected) == 0:
-            with st.expander("🔍 Debug: Why no codes selected?", expanded=False):
-                st.write(f"Local selected_codes count: {len(selected_codes)}")
-                st.write(f"Session state selected_codes count: {len(st.session_state.get('selected_codes', []))}")
-                st.write(f"Overall choice: {overall_choice}")
-                st.write(f"Grouped conditions: {list(grouped.keys())}")
-                st.write(f"Total codes from vector search: {len(codes)}")
-        
-        if final_selected and len(final_selected) > 0:
-            st.success(
-                f"I'll carry forward {len(final_selected)} code(s) across "
-                f"{len(grouped)} condition(s) when we move on to build the cohort definition "
-                "and, in the next milestone, search for patients."
-            )
-
-            if st.button("Add these codes and refine criteria", use_container_width=True):
-                refined_text = refine_criteria_with_codes()
-                if refined_text:
-                    st.rerun()  # Rerun to show the refined criteria and Genie button below
-        elif not codes or len(codes) == 0:
-            # Only show warning if there are no codes at all from vector search
-            st.warning(
-                "No codes were found from the vector search. Please check your criteria or try again."
-            )
-        else:
-            # Codes exist but none are selected
-            st.warning(
-                "You haven't selected any codes yet. Please choose 'Use all suggested codes' "
-                "or select specific codes in the expanders above."
-            )
-
-    # Show refined criteria and offer to send to Genie (after user has refined)
+    # Step 3: Refined Criteria & Genie
     refined_text = st.session_state.get("refined_criteria_text")
+    has_genie_result = st.session_state.get("genie_result") is not None
+    has_genie_running = st.session_state.get("genie_running", False)
+    
     if refined_text:
-        st.markdown("---")
-        st.subheader("Refined criteria I'll use going forward")
-        st.write(refined_text)
-        
-        if st.session_state.get("genie_running"):
-            # Actually call Genie now (this will poll and take time)
-            with st.spinner("Asking Genie to generate and run the cohort SQL... This may take up to 5 minutes. Please wait..."):
-                run_genie_for_refined_criteria()
-                # Ensure spinner stops (function should set this, but double-check)
+        with st.expander("✨ Step 3: Refined Criteria & Query", expanded=(not has_genie_result)):
+            st.markdown("**Refined criteria:**")
+            st.write(refined_text)
+            
+            if st.session_state.get("genie_running"):
+                # Actually call Genie now (this will poll and take time)
+                with st.spinner("⏳ Genie is processing... This may take up to 5 minutes. Please wait..."):
+                    run_genie_for_refined_criteria()
+                    st.session_state.genie_running = False
+                    st.rerun()
+            elif st.session_state.get("genie_error"):
+                st.error(f"❌ {st.session_state.genie_error}")
                 st.session_state.genie_running = False
-                st.rerun()  # Rerun to show results or error
-        elif st.session_state.get("genie_error"):
-            st.error(f"❌ {st.session_state.genie_error}")
-            # Make sure spinner is stopped if there's an error
-            st.session_state.genie_running = False
-        elif not st.session_state.get("genie_result"):
-            # Only show the Genie button if we haven't already run Genie
-            if st.button("Ask Genie to find patients for this refined criteria", use_container_width=True, type="primary"):
-                st.session_state.genie_running = True
-                st.rerun()  # Rerun to show the "running" message
+            elif not st.session_state.get("genie_result"):
+                if st.button("🚀 Ask Genie to Find Patients", use_container_width=True, type="primary"):
+                    st.session_state.genie_running = True
+                    st.rerun()
 
-    # If Genie has run, surface a concise view of what it did.
+    # Step 4: Genie Results
     genie_result = st.session_state.get("genie_result")
     if genie_result:
-        st.markdown("### Results from Genie (Text-to-SQL)")
+        with st.expander("📊 Step 4: Query Results", expanded=True):
         sql = genie_result.get("sql")
-        data = genie_result.get("data", [])
-        row_count = genie_result.get("row_count", 0)
-        exec_time = genie_result.get("execution_time")
+            data = genie_result.get("data", [])
+            row_count = genie_result.get("row_count", 0)
+            exec_time = genie_result.get("execution_time")
 
-        if sql:
-            st.subheader("Generated SQL")
-            st.code(sql, language="sql")
+            if sql:
+                with st.expander("📝 Generated SQL", expanded=False):
+                    st.code(sql, language="sql")
 
-        # Display row count with clear messaging
-        if row_count is not None and row_count > 0:
-            if data and len(data) > 0:
-                if len(data) < row_count:
-                    st.info(
-                        f"📊 **Total Results:** {row_count:,} row(s) | "
-                        f"**Displayed:** {len(data):,} row(s) "
-                        f"(showing up to {min(len(data), 5000):,} rows in table below)"
-                    )
+            # Display row count with clear messaging
+            if row_count is not None and row_count > 0:
+                if data and len(data) > 0:
+                    if len(data) < row_count:
+                        st.info(
+                            f"📊 **Total Results:** {row_count:,} row(s) | "
+                            f"**Displayed:** {len(data):,} row(s) "
+                            f"(showing up to {min(len(data), 5000):,} rows in table below)"
+                        )
+                    else:
+                        st.info(
+                            f"📊 **Results:** {row_count:,} row(s) "
+                            f"(showing up to {min(len(data), 5000):,} rows in table below)"
+                        )
                 else:
-                    st.info(
-                        f"📊 **Results:** {row_count:,} row(s) "
-                        f"(showing up to {min(len(data), 5000):,} rows in table below)"
-                    )
-            else:
-                st.info(f"📊 **Total Results:** {row_count:,} row(s) (data array not available - may be truncated)")
-        elif data and len(data) > 0:
-            st.info(f"📊 **Results:** {len(data):,} row(s) (showing up to {min(len(data), 5000):,} rows in table below)")
-        elif row_count == 0:
-            st.info("📊 **Results:** 0 row(s) - No patients match this criteria")
+                    st.info(f"📊 **Total Results:** {row_count:,} row(s) (data array not available - may be truncated)")
+            elif data and len(data) > 0:
+                st.info(f"📊 **Results:** {len(data):,} row(s) (showing up to {min(len(data), 5000):,} rows in table below)")
+            elif row_count == 0:
+                st.info("📊 **Results:** 0 row(s) - No patients match this criteria")
 
-        # Display execution time
-        if exec_time is not None:
-            st.caption(f"Query execution time (as reported by Genie): {exec_time}")
+            # Display execution time
+            if exec_time is not None:
+                st.caption(f"⏱️ Query execution time: {exec_time}")
 
-        # Display the actual data if available (limit to 5000 rows max)
-        MAX_DISPLAY_ROWS = 5000
-        if data and len(data) > 0:
-            st.subheader("Query Results")
-            try:
-                # Convert data to DataFrame for better display
-                import pandas as pd
-                df = pd.DataFrame(data)
-                
-                # Limit to max 5000 rows for display
-                total_rows = len(df)
-                display_df = df.head(MAX_DISPLAY_ROWS)
-                
-                # Show info about row limits
-                if total_rows > MAX_DISPLAY_ROWS:
-                    st.info(
-                        f"📊 Showing first {MAX_DISPLAY_ROWS:,} of {total_rows:,} total rows. "
-                        f"Data is limited to {MAX_DISPLAY_ROWS:,} rows for performance. "
-                        f"Use the generated SQL to query the full dataset if needed."
-                    )
-                elif row_count and row_count > total_rows:
-                    # Genie reported more rows than we have in data (truncated)
-                    st.info(
-                        f"📊 Showing {total_rows:,} rows. Genie reported {row_count:,} total rows. "
-                        f"Data may be truncated. Use the generated SQL to query the full dataset."
-                    )
-                
-                # Display the data (already limited to MAX_DISPLAY_ROWS)
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-                
-                # Show summary statistics if numeric columns exist
-                numeric_cols = display_df.select_dtypes(include=['number']).columns
-                if len(numeric_cols) > 0:
-                    with st.expander("Summary Statistics", expanded=False):
-                        st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
-            except Exception as e:
-                # If DataFrame conversion fails, show raw data (but still limit)
-                logger.warning(f"Could not convert Genie data to DataFrame: {e}")
-                limited_data = data[:MAX_DISPLAY_ROWS] if len(data) > MAX_DISPLAY_ROWS else data
-                if len(data) > MAX_DISPLAY_ROWS:
-                    st.info(f"Showing first {MAX_DISPLAY_ROWS:,} of {len(data):,} rows.")
-                st.json(limited_data)
-        elif row_count and row_count > 0:
-            # We have a row count but no data array (data might be truncated or not extracted)
-            st.warning(
-                f"Genie reported {row_count:,} row(s) were returned, but the data array is not available. "
-                f"This may be because:\n"
-                f"- The result set is very large and was truncated\n"
-                f"- Data extraction encountered an issue\n\n"
-                f"You can use the generated SQL above to query the full dataset directly."
-            )
+            # Display the actual data if available (limit to 5000 rows max)
+            MAX_DISPLAY_ROWS = 5000
+                try:
+                    # Convert data to DataFrame for better display
+                    import pandas as pd
+                    # Get column names from genie_result if available
+                    columns = genie_result.get("columns")
+                    if columns and len(columns) > 0:
+                        # Use provided column names
+                        df = pd.DataFrame(data, columns=columns)
+                        logger.info(f"Created DataFrame with {len(columns)} columns: {columns[:5]}..." if len(columns) > 5 else f"Created DataFrame with columns: {columns}")
+                    else:
+                        # If no column names, try to infer from data structure
+                        # If data is list of dicts, pandas will use dict keys as columns
+                        # If data is list of lists, we'll use numeric indices (fallback)
+                        df = pd.DataFrame(data)
+                        # Check if columns are numeric indices (0, 1, 2, ...) which indicates missing column names
+                        if len(df.columns) > 0 and all(isinstance(col, int) for col in df.columns):
+                            logger.warning("DataFrame created with numeric column indices. Column names not available from Genie.")
+                    
+                    # Limit to max 5000 rows for display
+                    total_rows = len(df)
+                    display_df = df.head(MAX_DISPLAY_ROWS)
+                    
+                    # Show info about row limits
+                    if total_rows > MAX_DISPLAY_ROWS:
+                        st.info(
+                            f"📊 Showing first {MAX_DISPLAY_ROWS:,} of {total_rows:,} total rows. "
+                            f"Data is limited to {MAX_DISPLAY_ROWS:,} rows for performance. "
+                            f"Use the generated SQL to query the full dataset if needed."
+                        )
+                    elif row_count and row_count > total_rows:
+                        # Genie reported more rows than we have in data (truncated)
+                        st.info(
+                            f"📊 Showing {total_rows:,} rows. Genie reported {row_count:,} total rows. "
+                            f"Data may be truncated. Use the generated SQL to query the full dataset."
+                        )
+                    
+                    # Display the data (already limited to MAX_DISPLAY_ROWS)
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+                    
+                    # Show summary statistics if numeric columns exist
+                    numeric_cols = display_df.select_dtypes(include=['number']).columns
+                    if len(numeric_cols) > 0:
+                        with st.expander("📈 Summary Statistics", expanded=False):
+                            st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
+                except Exception as e:
+                    # If DataFrame conversion fails, show raw data (but still limit)
+                    logger.warning(f"Could not convert Genie data to DataFrame: {e}")
+                    limited_data = data[:MAX_DISPLAY_ROWS] if len(data) > MAX_DISPLAY_ROWS else data
+                    if len(data) > MAX_DISPLAY_ROWS:
+                        st.info(f"Showing first {MAX_DISPLAY_ROWS:,} of {len(data):,} rows.")
+                    st.json(limited_data)
+            elif row_count and row_count > 0:
+                # We have a row count but no data array (data might be truncated or not extracted)
+                st.warning(
+                    f"Genie reported {row_count:,} row(s) were returned, but the data array is not available. "
+                    f"This may be because:\n"
+                    f"- The result set is very large and was truncated\n"
+                    f"- Data extraction encountered an issue\n\n"
+                    f"You can use the generated SQL above to query the full dataset directly."
+                )
 
 
 def process_query(query: str):
@@ -1373,7 +1356,7 @@ def main():
             if not has_warehouse: missing.append('SQL_WAREHOUSE_ID')
             logger.info(f"Missing required config values: {missing}, showing config page")
     
-    # Sidebar navigation
+    # Sidebar navigation and workflow progress
     with st.sidebar:
         st.title("🏥 Clinical Cohort Assistant")
         page = st.radio(
@@ -1381,6 +1364,49 @@ def main():
             ["Chat", "Configuration"],
             label_visibility="collapsed"
         )
+        
+        # Show workflow progress if on Chat page
+        if page == "Chat" and st.session_state.services_initialized:
+            st.markdown("---")
+            st.markdown("### Workflow Progress")
+            
+            # Determine current step
+            has_analysis = st.session_state.get("criteria_analysis") is not None
+            has_codes = len(st.session_state.get("codes", [])) > 0
+            has_selected_codes = len(st.session_state.get("selected_codes", [])) > 0
+            has_refined = st.session_state.get("refined_criteria_text") != ""
+            has_genie_result = st.session_state.get("genie_result") is not None
+            
+            steps = [
+                ("1️⃣", "Enter Criteria", has_analysis),
+                ("2️⃣", "Select Codes", has_selected_codes),
+                ("3️⃣", "Refine Criteria", has_refined),
+                ("4️⃣", "View Results", has_genie_result),
+            ]
+            
+            for icon, label, completed in steps:
+                if completed:
+                    st.markdown(f"{icon} ✅ **{label}**")
+                else:
+                    st.markdown(f"{icon} ⏳ {label}")
+            
+            # Quick actions in sidebar
+            st.markdown("---")
+            st.markdown("### Quick Actions")
+            if st.button("🔄 Reset Workflow", use_container_width=True):
+                # Reset all workflow-related session state
+                st.session_state.criteria_analysis = None
+                st.session_state.criteria_text = ""
+                st.session_state.codes = []
+                st.session_state.selected_codes = []
+                st.session_state.refined_criteria = None
+                st.session_state.refined_criteria_text = ""
+                st.session_state.code_search_text = ""
+                st.session_state.code_search_error = ""
+                st.session_state.genie_result = None
+                st.session_state.genie_error = None
+                st.session_state.genie_running = False
+                st.rerun()
     
     # Route to appropriate page
     if page == "Configuration":
