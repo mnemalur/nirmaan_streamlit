@@ -1191,36 +1191,6 @@ def render_chat_page():
         st.markdown("---")
         # Show dimension analysis results in compact grid layout
         display_dimension_results_compact(dimension_results)
-            
-            # Dimension Analysis (cohort table created automatically in background)
-            st.markdown("---")
-            st.markdown("### 📊 Dimension Analysis")
-            
-            cohort_table_info = st.session_state.get("cohort_table_info")
-            dimension_results = st.session_state.get("dimension_results")
-            dimension_analyzing = st.session_state.get("dimension_analyzing", False)
-            
-            if cohort_table_info:
-                # Table already created, ready for dimension analysis
-                if dimension_results:
-                    # Show dimension analysis results
-                    display_dimension_results(dimension_results)
-                elif dimension_analyzing:
-                    with st.spinner("Analyzing cohort dimensions... This may take a minute."):
-                        # This will be handled by the button click handler
-                        pass
-                else:
-                    st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
-                    if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
-                        st.session_state.dimension_analyzing = True
-                        st.rerun()
-            elif st.session_state.get("cohort_table_creating"):
-                # Creating table in background - user doesn't need to know details
-                with st.spinner("Preparing dimension analysis..."):
-                    create_cohort_table_from_genie_sql()
-                    st.rerun()
-            elif st.session_state.get("cohort_table_error"):
-                st.error(f"❌ {st.session_state.cohort_table_error}")
                 if st.button("🔄 Retry", use_container_width=True):
                     st.session_state.cohort_table_error = None
                     st.session_state.cohort_table_creating = True
