@@ -421,6 +421,10 @@ class GenieService:
         
         logger.info(f"Starting to poll for completion: conversation_id={conversation_id}, message_id={message_id}")
         
+        # Track when we first see COMPLETED status (to avoid infinite polling if data never arrives)
+        completed_first_seen_at = None
+        max_wait_after_completed = 30  # Wait max 30 seconds after COMPLETED status for data
+        
         # If message_id is unknown, try to get it from the conversation
         if message_id == "unknown" or not message_id:
             logger.info("message_id not available, attempting to list messages in conversation...")
@@ -502,16 +506,50 @@ class GenieService:
                 result = self._extract_result(message)
                 has_sql = bool(result.get('sql'))
                 has_data = bool(result.get('data')) and len(result.get('data', [])) > 0
+                row_count = result.get('row_count', 0) or 0
+                has_row_count = row_count > 0
+                
+                logger.info(
+                    f"Extracted result - SQL: {has_sql}, Data array: {has_data} ({len(result.get('data', []))} rows), "
+                    f"Row count: {row_count}"
+                )
                 
                 # Check if completed (try multiple status string formats)
                 status_str = str(status).upper() if status else ""
                 is_completed = (status == MessageStatus.COMPLETED or status_str == "COMPLETED")
                 
                 if is_completed:
-                    logger.info(f"Genie query completed. SQL: {has_sql}, Data: {has_data} ({len(result.get('data', []))} rows)")
+                    # Track when we first see COMPLETED
+                    if completed_first_seen_at is None:
+                        completed_first_seen_at = attempt
+                        logger.info("First time seeing COMPLETED status")
                     
-                    # CRITICAL: If we have SQL but no data, keep polling - data is still loading!
-                    if has_sql and not has_data:
+                    elapsed_since_completed = (attempt - completed_first_seen_at) * self.poll_interval
+                    
+                    logger.info(
+                        f"Genie query completed. SQL: {has_sql}, Data array: {has_data} ({len(result.get('data', []))} rows), "
+                        f"Row count: {row_count}, Elapsed since COMPLETED: {elapsed_since_completed}s"
+                    )
+                    
+                    # If we have SQL and row_count > 0, that means Genie has results (even if data array is truncated/empty)
+                    # Return it - we can show the count and whatever data we have
+                    if has_sql and has_row_count:
+                        logger.info(
+                            f"Status COMPLETED with SQL and row_count={row_count}. "
+                            f"Returning result (data array has {len(result.get('data', []))} rows, may be truncated)"
+                        )
+                        return result
+                    
+                    # If we've been waiting too long after COMPLETED status, return what we have
+                    if elapsed_since_completed >= max_wait_after_completed:
+                        logger.warning(
+                            f"COMPLETED status seen {elapsed_since_completed}s ago but no data/row_count found. "
+                            f"Returning what we have (SQL: {has_sql}) to avoid infinite polling."
+                        )
+                        return result
+                    
+                    # CRITICAL: If we have SQL but no data AND no row_count, keep polling - data is still loading!
+                    if has_sql and not has_data and not has_row_count:
                         logger.info(
                             f"SQL found but no data yet (attempt {attempt + 1}/{self.max_poll_attempts}). "
                             f"Genie is still processing data. Continuing to poll..."
@@ -551,17 +589,17 @@ class GenieService:
                             return result
                         
                         # Otherwise, continue polling - don't return yet!
-                        logger.info(f"No data found yet. Waiting {self.poll_interval}s and continuing to poll...")
+                        logger.info(f"No data or row_count found yet. Waiting {self.poll_interval}s and continuing to poll...")
                         time.sleep(self.poll_interval)
                         continue
                     
-                    # If we have both SQL and data, or just data, return it
-                    if has_data or (has_sql and has_data):
-                        logger.info(f"Returning completed result: SQL={has_sql}, Data rows={len(result.get('data', []))}")
+                    # If we have data array, return it
+                    if has_data:
+                        logger.info(f"Returning completed result with data array: {len(result.get('data', []))} rows")
                         return result
                     
-                    # If completed but no SQL and no data, something's wrong but return what we have
-                    logger.warning("Status is COMPLETED but no SQL or data found. Returning what we have.")
+                    # If completed but no SQL and no data/row_count, something's wrong but return what we have
+                    logger.warning("Status is COMPLETED but no SQL, data, or row_count found. Returning what we have.")
                     return result
                 
                 # Check if failed
@@ -579,9 +617,18 @@ class GenieService:
                 elif status in [MessageStatus.EXECUTING_QUERY, MessageStatus.FETCHING_METADATA, 
                                MessageStatus.QUERYING, MessageStatus.RUNNING] or \
                      status_str in ["EXECUTING_QUERY", "FETCHING_METADATA", "QUERYING", "RUNNING", "PROCESSING"]:
-                    # Even if status says running, check if we have data - sometimes data arrives early
+                    # Even if status says running, check if we have data or row_count - sometimes results arrive early
                     has_sql = bool(result.get('sql'))
                     has_data = bool(result.get('data')) and len(result.get('data', [])) > 0
+                    row_count = result.get('row_count', 0) or 0
+                    
+                    # If we have SQL and row_count, return it (data might be truncated)
+                    if has_sql and row_count > 0:
+                        logger.info(
+                            f"Found SQL and row_count={row_count} even though status is {status}! "
+                            f"Returning result (data array has {len(result.get('data', []))} rows)."
+                        )
+                        return result
                     
                     if has_data:
                         logger.info(
@@ -605,27 +652,33 @@ class GenieService:
                     continue
                 
                 else:
-                    # Unknown status - check if we have data, but keep polling if we only have SQL
+                    # Unknown status - check if we have data or row_count, but keep polling if we only have SQL
                     logger.warning(f"Unknown Genie status: {status}, checking for results...")
                     has_sql = bool(result.get('sql'))
                     has_data = bool(result.get('data')) and len(result.get('data', [])) > 0
+                    row_count = result.get('row_count', 0) or 0
+                    
+                    # If we have SQL and row_count, return it (data might be truncated)
+                    if has_sql and row_count > 0:
+                        logger.info(f"Found SQL and row_count={row_count} despite unknown status. Returning result.")
+                        return result
                     
                     # If we have data (with or without SQL), return it
                     if has_data:
                         logger.info(f"Found data despite unknown status. Returning result: {len(result['data'])} rows")
                         return result
                     
-                    # If we have SQL but no data, keep polling - data might still be loading
-                    if has_sql and not has_data:
+                    # If we have SQL but no data/row_count, keep polling - data might still be loading
+                    if has_sql and not has_data and not row_count:
                         logger.info(
-                            f"Have SQL but no data yet (status: {status}). "
+                            f"Have SQL but no data/row_count yet (status: {status}). "
                             f"Continuing to poll for data... ({attempt + 1}/{self.max_poll_attempts})"
                         )
                         time.sleep(self.poll_interval)
                         continue
                     
                     # If we have neither, keep waiting
-                    logger.info(f"Continuing to poll with unknown status: {status} (no SQL or data yet)")
+                    logger.info(f"Continuing to poll with unknown status: {status} (no SQL, data, or row_count yet)")
                     time.sleep(self.poll_interval)
                     continue
                     

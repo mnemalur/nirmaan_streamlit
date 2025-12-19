@@ -350,9 +350,12 @@ def run_genie_for_refined_criteria():
         st.session_state.genie_result = result
         st.session_state.genie_conversation_id = result.get("conversation_id")
         st.session_state.genie_error = None
+        st.session_state.genie_running = False  # Ensure spinner stops
+        logger.info(f"Genie completed successfully. SQL: {bool(result.get('sql'))}, Row count: {result.get('row_count', 0)}, Data rows: {len(result.get('data', []))}")
     except Exception as e:
         error_msg = f"Error while calling Genie: {e}"
         st.session_state.genie_error = error_msg
+        st.session_state.genie_running = False  # Ensure spinner stops even on error
         logger.error(f"Genie error: {e}", exc_info=True)
 
 
@@ -789,10 +792,13 @@ def render_chat_page():
             # Actually call Genie now (this will poll and take time)
             with st.spinner("Asking Genie to generate and run the cohort SQL... This may take up to 5 minutes. Please wait..."):
                 run_genie_for_refined_criteria()
+                # Ensure spinner stops (function should set this, but double-check)
                 st.session_state.genie_running = False
                 st.rerun()  # Rerun to show results or error
         elif st.session_state.get("genie_error"):
             st.error(f"❌ {st.session_state.genie_error}")
+            # Make sure spinner is stopped if there's an error
+            st.session_state.genie_running = False
         elif not st.session_state.get("genie_result"):
             # Only show the Genie button if we haven't already run Genie
             if st.button("Ask Genie to find patients for this refined criteria", use_container_width=True, type="primary"):
@@ -812,17 +818,33 @@ def render_chat_page():
             st.subheader("Generated SQL")
             st.code(sql, language="sql")
 
-        # Display row count
-        if row_count is not None:
-            st.info(f"Genie reports {row_count} row(s) returned for this cohort query.")
-        elif data:
-            st.info(f"Genie returned {len(data)} row(s) for this cohort query.")
+        # Display row count with clear messaging
+        if row_count is not None and row_count > 0:
+            if data and len(data) > 0:
+                if len(data) < row_count:
+                    st.info(
+                        f"📊 **Total Results:** {row_count:,} row(s) | "
+                        f"**Displayed:** {len(data):,} row(s) "
+                        f"(showing up to {min(len(data), 5000):,} rows in table below)"
+                    )
+                else:
+                    st.info(
+                        f"📊 **Results:** {row_count:,} row(s) "
+                        f"(showing up to {min(len(data), 5000):,} rows in table below)"
+                    )
+            else:
+                st.info(f"📊 **Total Results:** {row_count:,} row(s) (data array not available - may be truncated)")
+        elif data and len(data) > 0:
+            st.info(f"📊 **Results:** {len(data):,} row(s) (showing up to {min(len(data), 5000):,} rows in table below)")
+        elif row_count == 0:
+            st.info("📊 **Results:** 0 row(s) - No patients match this criteria")
 
         # Display execution time
         if exec_time is not None:
             st.caption(f"Query execution time (as reported by Genie): {exec_time}")
 
-        # Display the actual data if available
+        # Display the actual data if available (limit to 5000 rows max)
+        MAX_DISPLAY_ROWS = 5000
         if data and len(data) > 0:
             st.subheader("Query Results")
             try:
@@ -830,26 +852,48 @@ def render_chat_page():
                 import pandas as pd
                 df = pd.DataFrame(data)
                 
-                # Show data in an expander if there are many rows
-                if len(df) > 50:
-                    st.info(f"Showing first 50 of {len(df)} rows. Use the expander below to see all data.")
-                    with st.expander(f"View all {len(df)} rows", expanded=False):
-                        st.dataframe(df, use_container_width=True, hide_index=True)
-                    st.dataframe(df.head(50), use_container_width=True, hide_index=True)
-                else:
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                # Limit to max 5000 rows for display
+                total_rows = len(df)
+                display_df = df.head(MAX_DISPLAY_ROWS)
+                
+                # Show info about row limits
+                if total_rows > MAX_DISPLAY_ROWS:
+                    st.info(
+                        f"📊 Showing first {MAX_DISPLAY_ROWS:,} of {total_rows:,} total rows. "
+                        f"Data is limited to {MAX_DISPLAY_ROWS:,} rows for performance. "
+                        f"Use the generated SQL to query the full dataset if needed."
+                    )
+                elif row_count and row_count > total_rows:
+                    # Genie reported more rows than we have in data (truncated)
+                    st.info(
+                        f"📊 Showing {total_rows:,} rows. Genie reported {row_count:,} total rows. "
+                        f"Data may be truncated. Use the generated SQL to query the full dataset."
+                    )
+                
+                # Display the data (already limited to MAX_DISPLAY_ROWS)
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
                 
                 # Show summary statistics if numeric columns exist
-                numeric_cols = df.select_dtypes(include=['number']).columns
+                numeric_cols = display_df.select_dtypes(include=['number']).columns
                 if len(numeric_cols) > 0:
                     with st.expander("Summary Statistics", expanded=False):
-                        st.dataframe(df[numeric_cols].describe(), use_container_width=True)
+                        st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
             except Exception as e:
-                # If DataFrame conversion fails, show raw data
+                # If DataFrame conversion fails, show raw data (but still limit)
                 logger.warning(f"Could not convert Genie data to DataFrame: {e}")
-                st.json(data)
+                limited_data = data[:MAX_DISPLAY_ROWS] if len(data) > MAX_DISPLAY_ROWS else data
+                if len(data) > MAX_DISPLAY_ROWS:
+                    st.info(f"Showing first {MAX_DISPLAY_ROWS:,} of {len(data):,} rows.")
+                st.json(limited_data)
         elif row_count and row_count > 0:
-            st.warning("Genie reported rows were returned, but data is not available. The SQL query may have executed but data extraction failed.")
+            # We have a row count but no data array (data might be truncated or not extracted)
+            st.warning(
+                f"Genie reported {row_count:,} row(s) were returned, but the data array is not available. "
+                f"This may be because:\n"
+                f"- The result set is very large and was truncated\n"
+                f"- Data extraction encountered an issue\n\n"
+                f"You can use the generated SQL above to query the full dataset directly."
+            )
 
 
 def process_query(query: str):
