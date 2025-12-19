@@ -142,45 +142,77 @@ Patient Schema: {config.patient_catalog}.{config.patient_schema}
         if dimension_name in ['age_groups', 'gender', 'race', 'ethnicity', 'visit_level', 'admit_source', 'admit_type']:
             prompt += f"⚠️ **CRITICAL**: For '{dimension_name}', you **MUST use phd_de_patdemo table**\n"
             prompt += f"- Table: {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo (use alias 'd')\n"
-            # Use exact column names if discovered
+            # Use exact column names if discovered (include comments if available)
             if exact_columns:
                 if 'age_column' in exact_columns:
-                    prompt += f"- **EXACT column for age**: d.{exact_columns['age_column']}\n"
+                    comment = exact_columns.get('age_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for age**: d.{exact_columns['age_column']} (patient-level dimension){comment_text}\n"
                 if 'gender_column' in exact_columns:
-                    prompt += f"- **EXACT column for gender**: d.{exact_columns['gender_column']}\n"
+                    comment = exact_columns.get('gender_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for gender**: d.{exact_columns['gender_column']} (patient-level dimension){comment_text}\n"
                 if 'race_column' in exact_columns:
-                    prompt += f"- **EXACT column for race**: d.{exact_columns['race_column']}\n"
+                    comment = exact_columns.get('race_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for race**: d.{exact_columns['race_column']} (patient-level dimension){comment_text}\n"
                 if 'ethnicity_column' in exact_columns:
-                    prompt += f"- **EXACT column for ethnicity**: d.{exact_columns['ethnicity_column']}\n"
+                    comment = exact_columns.get('ethnicity_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for ethnicity**: d.{exact_columns['ethnicity_column']} (patient-level dimension, e.g., HISPANIC_IND){comment_text}\n"
                 if 'visit_level_column' in exact_columns:
-                    prompt += f"- **EXACT column for visit_level**: d.{exact_columns['visit_level_column']}\n"
+                    comment = exact_columns.get('visit_level_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for visit_level**: d.{exact_columns['visit_level_column']} (visit-level dimension, e.g., I_O_IND){comment_text}\n"
                 if 'admit_source_column' in exact_columns:
-                    prompt += f"- **EXACT column for admit_source**: d.{exact_columns['admit_source_column']}\n"
+                    comment = exact_columns.get('admit_source_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for admit_source**: d.{exact_columns['admit_source_column']} (visit-level dimension, e.g., PAT_TYPE){comment_text}\n"
                 if 'admit_type_column' in exact_columns:
-                    prompt += f"- **EXACT column for admit_type**: d.{exact_columns['admit_type_column']}\n"
+                    comment = exact_columns.get('admit_type_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for admit_type**: d.{exact_columns['admit_type_column']} (visit-level dimension, e.g., ADM_TYPE){comment_text}\n"
             else:
-                # Fallback to generic names if discovery failed
-                if dimension_name in ['age_groups', 'gender', 'race', 'ethnicity']:
-                    prompt += f"- Columns: age, gender, race, ethnicity\n"
-                else:
-                    prompt += f"- Columns: visit_type, visit_level, admit_source, admit_type\n"
+                # Fallback to expected names if discovery failed
+                if dimension_name == 'age_groups':
+                    prompt += f"- Expected column: AGE (patient-level)\n"
+                elif dimension_name == 'gender':
+                    prompt += f"- Expected column: GENDER (patient-level)\n"
+                elif dimension_name == 'race':
+                    prompt += f"- Expected column: race (patient-level)\n"
+                elif dimension_name == 'ethnicity':
+                    prompt += f"- Expected column: HISPANIC_IND (patient-level)\n"
+                elif dimension_name == 'visit_level':
+                    prompt += f"- Expected column: I_O_IND (visit-level)\n"
+                elif dimension_name == 'admit_source':
+                    prompt += f"- Expected column: PAT_TYPE (visit-level)\n"
+                elif dimension_name == 'admit_type':
+                    prompt += f"- Expected column: ADM_TYPE (visit-level)\n"
         elif dimension_name in ['urban_rural', 'teaching', 'bed_count']:
             prompt += f"⚠️ **CRITICAL**: For '{dimension_name}', you **MUST use TWO JOINS** (bridge pattern):\n"
             prompt += f"1. First join cohort → phd_de_patdemo: ON c.{join_key} = d.{join_key} (alias 'd')\n"
-            # Use exact prov_id column if discovered
+            # Use exact prov_id/provider_key column if discovered
             prov_id_col = exact_columns.get('prov_id_column', 'prov_id')
-            prompt += f"2. Second join phd_de_patdemo → provider: ON COALESCE(d.{prov_id_col}, d.provider_key) = COALESCE(p.{prov_id_col}, p.provider_key) (alias 'p')\n"
+            # PROVIDER_KEY and PROV_ID mean the same thing - use COALESCE to handle both
+            prompt += f"2. Second join phd_de_patdemo → provider: ON COALESCE(d.{prov_id_col}, d.PROVIDER_KEY) = COALESCE(p.{prov_id_col}, p.PROVIDER_KEY) (alias 'p')\n"
+            prompt += f"   **Note**: PROVIDER_KEY and PROV_ID mean the same thing - use COALESCE to handle either column name\n"
             prompt += f"- Provider table: {config.patient_catalog}.{config.patient_schema}.provider\n"
-            # Use exact provider columns if discovered
+            # Use exact provider columns if discovered (include comments if available)
             if exact_columns:
                 if 'location_type_column' in exact_columns:
-                    prompt += f"- **EXACT column for location_type**: p.{exact_columns['location_type_column']}\n"
+                    comment = exact_columns.get('location_type_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for location_type**: p.{exact_columns['location_type_column']} (e.g., URBAN_RURAL){comment_text}\n"
                 if 'teaching_flag_column' in exact_columns:
-                    prompt += f"- **EXACT column for teaching_flag**: p.{exact_columns['teaching_flag_column']}\n"
+                    comment = exact_columns.get('teaching_flag_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for teaching_flag**: p.{exact_columns['teaching_flag_column']} (e.g., TEACHING){comment_text}\n"
                 if 'bed_count_column' in exact_columns:
-                    prompt += f"- **EXACT column for bed_count**: p.{exact_columns['bed_count_column']}\n"
+                    comment = exact_columns.get('bed_count_column_comment', '')
+                    comment_text = f" - {comment}" if comment else ""
+                    prompt += f"- **EXACT column for bed_count**: p.{exact_columns['bed_count_column']} (e.g., BEDS_GRP){comment_text}\n"
             else:
-                prompt += f"- Provider columns: location_type, teaching_flag, bed_count\n"
+                prompt += f"- Expected provider columns: URBAN_RURAL, TEACHING, BEDS_GRP\n"
             prompt += f"- Note: prov_id and provider_key are the same - use COALESCE to handle either\n"
         else:
             # Fallback to recommended tables if provided
@@ -249,7 +281,7 @@ FROM {cohort_table_quoted} c
 JOIN {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo d 
     ON c.{join_key} = d.{join_key}
 JOIN {config.patient_catalog}.{config.patient_schema}.provider p 
-    ON COALESCE(d.prov_id, d.provider_key) = COALESCE(p.prov_id, p.provider_key)
+    ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY)
 WHERE p.location_type IS NOT NULL
 GROUP BY location_type
 ORDER BY patient_count DESC
@@ -275,8 +307,8 @@ Generate a SQL query following these rules:
      → **MUST use**: {config.patient_catalog}.{config.patient_schema}.provider
      → **CRITICAL**: Use phd_de_patdemo as bridge! Join pattern:
        1. First join: Cohort → phd_de_patdemo (ON c.{join_key} = d.{join_key}, alias 'd')
-       2. Second join: phd_de_patdemo → provider (ON COALESCE(d.prov_id, d.provider_key) = COALESCE(p.prov_id, p.provider_key), alias 'p')
-     → Note: prov_id and provider_key are the same - use COALESCE to handle either column name
+       2. Second join: phd_de_patdemo → provider (ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY), alias 'p')
+     → **CRITICAL**: PROVIDER_KEY and PROV_ID mean the same thing - use COALESCE to handle either column name (case-insensitive)
 
 2. **Column Selection (USE EXACT COLUMN NAMES FROM ABOVE):**
    - You MUST use the exact column names specified in the "EXACT column" lines above

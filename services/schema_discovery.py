@@ -72,7 +72,7 @@ class SchemaDiscoveryService:
     
     def discover_columns(self, catalog: str, schema: str, table: str) -> List[Dict]:
         """
-        Discover all columns for a specific table
+        Discover all columns for a specific table, including comments from Databricks metadata
         
         Args:
             catalog: Catalog name
@@ -80,7 +80,7 @@ class SchemaDiscoveryService:
             table: Table name
             
         Returns:
-            List of column metadata dictionaries
+            List of column metadata dictionaries with COLUMN_NAME, DATA_TYPE, COMMENT, etc.
         """
         sql = f"""
         SELECT 
@@ -98,7 +98,12 @@ class SchemaDiscoveryService:
         """
         
         try:
-            return self._execute_query(sql)
+            columns = self._execute_query(sql)
+            # Log column comments if available (helpful for LLM)
+            for col in columns:
+                if col.get('COMMENT'):
+                    logger.debug(f"Column {table}.{col['COLUMN_NAME']}: {col['COMMENT']}")
+            return columns
         except Exception as e:
             logger.error(f"Error discovering columns for {table}: {str(e)}")
             return []
@@ -269,10 +274,16 @@ class SchemaDiscoveryService:
         # Get columns from the recommended table(s)
         # For site dimensions, we also need phd_de_patdemo for the bridge join
         table_columns = {}
+        column_comments = {}  # Store column comments for LLM context
         for table_name in recommended_tables:
             if table_name:
                 columns = self.discover_columns(catalog, schema, table_name)
                 table_columns[table_name] = {col['COLUMN_NAME']: col for col in columns}
+                # Store comments for this table
+                column_comments[table_name] = {
+                    col['COLUMN_NAME']: col.get('COMMENT', '') 
+                    for col in columns if col.get('COMMENT')
+                }
         
         # For site dimensions, also get phd_de_patdemo columns (needed for bridge join)
         if dimension_name in ['urban_rural', 'teaching', 'bed_count']:
@@ -288,6 +299,11 @@ class SchemaDiscoveryService:
             if patdemo_table and patdemo_table not in table_columns:
                 columns = self.discover_columns(catalog, schema, patdemo_table)
                 table_columns[patdemo_table] = {col['COLUMN_NAME']: col for col in columns}
+                # Store comments for phd_de_patdemo too
+                column_comments[patdemo_table] = {
+                    col['COLUMN_NAME']: col.get('COMMENT', '') 
+                    for col in columns if col.get('COMMENT')
+                }
         
         result = {}
         
@@ -299,57 +315,87 @@ class SchemaDiscoveryService:
             return None
         
         # Map dimension to expected columns and find actual matches
+        # NOTE: phd_de_patdemo is ENCOUNTER-CENTRIC (patient_key = encounter/visit)
+        # Patient-level: AGE, GENDER, race, HISPANIC_IND
+        # Visit-level: I_O_IND, ADM_TYPE, PAT_TYPE
+        
         if dimension_name == 'age_groups':
-            # Look for age column in phd_de_patdemo
+            # Look for AGE column in phd_de_patdemo
             cols = find_table('phd_de_patdemo')
             if cols:
-                # Find age column (case-insensitive)
-                for col_name in cols.keys():
-                    if 'age' in col_name.lower():
-                        result['age_column'] = col_name
-                        break
+                # Try exact match first, then case-insensitive
+                if 'AGE' in cols:
+                    result['age_column'] = 'AGE'
+                else:
+                    for col_name in cols.keys():
+                        if col_name.upper() == 'AGE' or (col_name.upper().startswith('AGE') and len(col_name) <= 5):
+                            result['age_column'] = col_name
+                            break
         
         elif dimension_name == 'gender':
             cols = find_table('phd_de_patdemo')
             if cols:
-                for col_name in cols.keys():
-                    if 'gender' in col_name.lower() or 'sex' in col_name.lower():
-                        result['gender_column'] = col_name
-                        break
+                if 'GENDER' in cols:
+                    result['gender_column'] = 'GENDER'
+                else:
+                    for col_name in cols.keys():
+                        if col_name.upper() == 'GENDER' or 'gender' in col_name.lower():
+                            result['gender_column'] = col_name
+                            break
         
         elif dimension_name == 'race':
             cols = find_table('phd_de_patdemo')
             if cols:
-                for col_name in cols.keys():
-                    if 'race' in col_name.lower():
-                        result['race_column'] = col_name
-                        break
+                if 'race' in cols:
+                    result['race_column'] = 'race'
+                else:
+                    for col_name in cols.keys():
+                        if col_name.lower() == 'race' or col_name.upper() == 'RACE':
+                            result['race_column'] = col_name
+                            break
         
         elif dimension_name == 'ethnicity':
             cols = find_table('phd_de_patdemo')
             if cols:
-                for col_name in cols.keys():
-                    if 'ethnic' in col_name.lower():
-                        result['ethnicity_column'] = col_name
-                        break
+                if 'HISPANIC_IND' in cols:
+                    result['ethnicity_column'] = 'HISPANIC_IND'
+                else:
+                    for col_name in cols.keys():
+                        if 'hispanic' in col_name.lower() or 'ethnic' in col_name.lower():
+                            result['ethnicity_column'] = col_name
+                            break
         
-        elif dimension_name in ['visit_level', 'admit_source', 'admit_type']:
+        elif dimension_name == 'visit_level':
             cols = find_table('phd_de_patdemo')
             if cols:
-                if dimension_name == 'visit_level':
+                if 'I_O_IND' in cols:
+                    result['visit_level_column'] = 'I_O_IND'
+                else:
                     for col_name in cols.keys():
-                        if 'visit' in col_name.lower() and ('level' in col_name.lower() or 'type' in col_name.lower()):
+                        if 'i_o' in col_name.lower() or ('inpatient' in col_name.lower() and 'outpatient' in col_name.lower()):
                             result['visit_level_column'] = col_name
                             break
-                elif dimension_name == 'admit_source':
+        
+        elif dimension_name == 'admit_type':
+            cols = find_table('phd_de_patdemo')
+            if cols:
+                if 'ADM_TYPE' in cols:
+                    result['admit_type_column'] = 'ADM_TYPE'
+                else:
                     for col_name in cols.keys():
-                        if 'admit' in col_name.lower() and 'source' in col_name.lower():
-                            result['admit_source_column'] = col_name
-                            break
-                elif dimension_name == 'admit_type':
-                    for col_name in cols.keys():
-                        if 'admit' in col_name.lower() and 'type' in col_name.lower():
+                        if col_name.upper() == 'ADM_TYPE' or ('admit' in col_name.lower() and 'type' in col_name.lower()):
                             result['admit_type_column'] = col_name
+                            break
+        
+        elif dimension_name == 'admit_source':
+            cols = find_table('phd_de_patdemo')
+            if cols:
+                if 'PAT_TYPE' in cols:
+                    result['admit_source_column'] = 'PAT_TYPE'
+                else:
+                    for col_name in cols.keys():
+                        if col_name.upper() == 'PAT_TYPE' or ('pat' in col_name.lower() and 'type' in col_name.lower()):
+                            result['admit_source_column'] = col_name
                             break
         
         elif dimension_name == 'urban_rural':
@@ -363,10 +409,18 @@ class SchemaDiscoveryService:
             # Also need prov_id from phd_de_patdemo for bridge join
             patdemo_cols = find_table('phd_de_patdemo')
             if patdemo_cols:
+                # Look for PROVIDER_KEY or PROV_ID (they mean the same thing)
+                prov_col = None
                 for col_name in patdemo_cols.keys():
-                    if 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
-                        result['prov_id_column'] = col_name
+                    col_upper = col_name.upper()
+                    if col_upper == 'PROVIDER_KEY' or col_upper == 'PROV_ID':
+                        prov_col = col_name
                         break
+                    elif 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                        prov_col = col_name
+                        break
+                if prov_col:
+                    result['prov_id_column'] = prov_col
         
         elif dimension_name == 'teaching':
             provider_cols = find_table('provider')
@@ -377,10 +431,18 @@ class SchemaDiscoveryService:
                         break
             patdemo_cols = find_table('phd_de_patdemo')
             if patdemo_cols:
+                # Look for PROVIDER_KEY or PROV_ID (they mean the same thing)
+                prov_col = None
                 for col_name in patdemo_cols.keys():
-                    if 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
-                        result['prov_id_column'] = col_name
+                    col_upper = col_name.upper()
+                    if col_upper == 'PROVIDER_KEY' or col_upper == 'PROV_ID':
+                        prov_col = col_name
                         break
+                    elif 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                        prov_col = col_name
+                        break
+                if prov_col:
+                    result['prov_id_column'] = prov_col
         
         elif dimension_name == 'bed_count':
             provider_cols = find_table('provider')
@@ -391,10 +453,24 @@ class SchemaDiscoveryService:
                         break
             patdemo_cols = find_table('phd_de_patdemo')
             if patdemo_cols:
+                # Look for PROVIDER_KEY or PROV_ID (they mean the same thing)
+                prov_col = None
                 for col_name in patdemo_cols.keys():
-                    if 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
-                        result['prov_id_column'] = col_name
+                    col_upper = col_name.upper()
+                    if col_upper == 'PROVIDER_KEY' or col_upper == 'PROV_ID':
+                        prov_col = col_name
                         break
+                    elif 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                        prov_col = col_name
+                        break
+                if prov_col:
+                    result['prov_id_column'] = prov_col
+        
+        # Add column comments to result if available (helpful for LLM)
+        for table_name, comments in column_comments.items():
+            for col_key, col_name in result.items():
+                if col_name in comments and comments[col_name]:
+                    result[f"{col_key}_comment"] = comments[col_name]
         
         logger.info(f"Exact columns for {dimension_name}: {result}")
         return result

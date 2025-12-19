@@ -544,7 +544,7 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             JOIN {config.patient_table_prefix}.provider p
-                ON COALESCE(d.prov_id, d.provider_key) = COALESCE(p.prov_id, p.provider_key)
+                ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY)
             GROUP BY location_type
             ORDER BY patient_count DESC
         """
@@ -563,7 +563,7 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             JOIN {config.patient_table_prefix}.provider p
-                ON COALESCE(d.prov_id, d.provider_key) = COALESCE(p.prov_id, p.provider_key)
+                ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY)
             GROUP BY teaching_status
             ORDER BY patient_count DESC
         """
@@ -584,7 +584,7 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             JOIN {config.patient_table_prefix}.provider p
-                ON COALESCE(d.prov_id, d.provider_key) = COALESCE(p.prov_id, p.provider_key)
+                ON COALESCE(d.PROV_ID, d.PROVIDER_KEY) = COALESCE(p.PROV_ID, p.PROVIDER_KEY)
             WHERE p.bed_count IS NOT NULL
             GROUP BY bed_count_group
             ORDER BY 
