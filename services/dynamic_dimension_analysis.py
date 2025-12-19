@@ -264,17 +264,19 @@ FROM {cohort_table_quoted} c
 JOIN {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo d 
     ON c.{join_key} = d.{join_key}
 WHERE d.GENDER IS NOT NULL
-GROUP BY gender
+GROUP BY d.GENDER
 ORDER BY patient_count DESC
 ```
+**CRITICAL**: Always use table alias (d.) when referencing columns in WHERE, GROUP BY, and SELECT clauses to avoid ambiguous references!
 
 For SITE dimensions (urban_rural, teaching, bed_count) - USE BRIDGE JOIN:
 ```sql
+-- Example for urban_rural dimension:
 SELECT 
     CASE 
-        WHEN p.location_type IN ('Urban', 'URBAN') THEN 'Urban'
-        WHEN p.location_type IN ('Rural', 'RURAL') THEN 'Rural'
-        ELSE COALESCE(p.location_type, 'Unknown')
+        WHEN p.URBAN_RURAL IN ('Urban', 'URBAN') THEN 'Urban'
+        WHEN p.URBAN_RURAL IN ('Rural', 'RURAL') THEN 'Rural'
+        ELSE COALESCE(p.URBAN_RURAL, 'Unknown')
     END as location_type,
     COUNT(DISTINCT c.{join_key}) as patient_count,
     ROUND(COUNT(DISTINCT c.{join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{join_key})) OVER(), 2) as percentage
@@ -284,9 +286,10 @@ JOIN {config.patient_catalog}.{config.patient_schema}.phd_de_patdemo d
 JOIN {config.patient_catalog}.{config.patient_schema}.phd_de_providers p 
     ON d.PROV_ID = p.PROV_ID
 WHERE p.URBAN_RURAL IS NOT NULL
-GROUP BY location_type
+GROUP BY p.URBAN_RURAL
 ORDER BY patient_count DESC
 ```
+**CRITICAL**: Always use table alias (p.) when referencing columns in WHERE, GROUP BY, and SELECT clauses to avoid ambiguous references!
 
 CRITICAL Syntax Rules:
 - Cohort table: Use exactly as shown: {cohort_table_quoted} (already has backticks)
@@ -294,7 +297,7 @@ CRITICAL Syntax Rules:
 - JOIN: Standard SQL JOIN syntax
 - Window functions: SUM(COUNT(DISTINCT ...)) OVER() for percentage
 - CASE: Standard SQL CASE WHEN ... THEN ... ELSE ... END
-- GROUP BY: Use the dimension column name (e.g., age_group)
+- GROUP BY: Always use the qualified source column (e.g., d.GENDER, d.race, p.URBAN_RURAL) NOT the alias to avoid ambiguity
 - ORDER BY: Use CASE for proper ordering of grouped values
 
 Generate a SQL query following these rules:
@@ -312,7 +315,9 @@ Generate a SQL query following these rules:
      → **CRITICAL**: Both tables use PROV_ID as the join key
 
 2. **Column Selection (CRITICAL - ONLY USE PROVIDED COLUMNS):**
-   - **YOU MUST ONLY USE COLUMNS FROM phd_de_patdemo OR provider TABLES**
+   - **YOU MUST ONLY USE COLUMNS FROM phd_de_patdemo (alias 'd') OR phd_de_providers (alias 'p') TABLES**
+   - **ALWAYS qualify columns with table alias**: Use d.GENDER, d.race, p.URBAN_RURAL, etc. (NOT unqualified column names)
+   - **In GROUP BY, use the qualified column**: GROUP BY d.GENDER (NOT GROUP BY gender) to avoid ambiguity
    - **DO NOT use any columns that are not explicitly listed above**
    - **DO NOT guess column names - if a column is not in the "EXACT column" list above, DO NOT use it**
    - You MUST use the exact column names specified in the "EXACT column" lines above
@@ -324,9 +329,9 @@ Generate a SQL query following these rules:
    - visit_level → Use the EXACT visit_level column name shown above
    - admit_source → Use the EXACT admit_source column name shown above
    - admit_type → Use the EXACT admit_type column name shown above
-   - urban_rural → Use the EXACT location_type column name shown above from provider table
-   - teaching → Use the EXACT teaching_flag column name shown above from provider table
-   - bed_count → Use the EXACT bed_count column name shown above from provider table (may be BED_GRP, BED_COUNT, etc.)
+   - urban_rural → Use the EXACT location_type column name shown above from phd_de_providers table (e.g., p.URBAN_RURAL)
+   - teaching → Use the EXACT teaching_flag column name shown above from phd_de_providers table (e.g., p.TEACHING)
+   - bed_count → Use the EXACT bed_count column name shown above from phd_de_providers table (e.g., p.BEDS_GRP)
 
 3. **SQL Structure:**
    - Use Unity Catalog format: catalog.schema.tablename (NO backticks)
@@ -374,11 +379,16 @@ Generate a SQL query following these rules:
 The visualization code expects these exact column names!
 
 ⚠️ FINAL REMINDER - COLUMN RESTRICTIONS:
-- **ONLY use columns from phd_de_patdemo (alias 'd') or provider (alias 'p')**
+- **ONLY use columns from phd_de_patdemo (alias 'd') or phd_de_providers (alias 'p')**
 - **For phd_de_patdemo, ONLY use**: GENDER, race, HISPANIC_IND, I_O_IND, ADM_TYPE, PAT_TYPE, PAT_KEY, MEDREC_KEY, PROV_ID, DISCHARGE_DATE
-- **For provider, ONLY use**: URBAN_RURAL, TEACHING, BEDS_GRP, PROV_ID, PROVIDER_KEY
+- **For phd_de_providers, ONLY use**: URBAN_RURAL, TEACHING, BEDS_GRP, PROV_ID
 - **DO NOT use any other column names - they do not exist and will cause "UNRESOLVED COLUMN" errors**
 - **DO NOT reference any 'encounter' table - it does not exist. phd_de_patdemo IS the encounter table.**
+- **ONLY analyze these 9 dimensions**: gender, race, ethnicity, visit_level, admit_type, admit_source, urban_rural, teaching, bed_count
+- **CRITICAL - AVOID AMBIGUOUS REFERENCES**: Always qualify columns with table alias (d. or p.) in SELECT, WHERE, and GROUP BY clauses. 
+  * Example: Use `d.GENDER` not just `GENDER` in SELECT and WHERE
+  * Example: Use `GROUP BY d.GENDER` not `GROUP BY gender` to avoid ambiguity if cohort table has a gender column
+  * The cohort table (alias 'c') may have columns with similar names - always use table aliases to avoid conflicts!
 
 Return ONLY the SQL query, no markdown code blocks, no explanations, just the SQL.
 The query must follow Databricks Unity Catalog SQL syntax exactly as shown in the example above.

@@ -221,29 +221,22 @@ class SchemaDiscoveryService:
                         provider_table = table_info['TABLE_NAME']
                         break
         
-        # Default mappings (simplified)
+        # Default mappings (simplified - ONLY the 9 dimensions we support)
         dimension_to_tables = {
-            # Patient-level dimensions → patdemo
-            'age_groups': [patdemo_table] if patdemo_table else [],
+            # Patient-level dimensions → phd_de_patdemo
             'gender': [patdemo_table] if patdemo_table else [],
             'race': [patdemo_table] if patdemo_table else [],
             'ethnicity': [patdemo_table] if patdemo_table else [],
             
-            # Visit-level dimensions → patdemo (visit info is often in patient demo table)
+            # Visit-level dimensions → phd_de_patdemo
             'visit_level': [patdemo_table] if patdemo_table else [],
-            'admit_source': [patdemo_table] if patdemo_table else [],
             'admit_type': [patdemo_table] if patdemo_table else [],
+            'admit_source': [patdemo_table] if patdemo_table else [],
             
-            # Site-level dimensions → provider
+            # Site-level dimensions → phd_de_providers
             'urban_rural': [provider_table] if provider_table else [],
             'teaching': [provider_table] if provider_table else [],
             'bed_count': [provider_table] if provider_table else [],
-            
-            # Other dimensions (for future use)
-            'procedures': [],
-            'diagnoses': [],
-            'labs': [],
-            'medications': []
         }
         
         logger.info(f"Dimension table mapping - phd_de_patdemo: {patdemo_table}, phd_de_providers: {provider_table}")
@@ -410,68 +403,87 @@ class SchemaDiscoveryService:
                             break
         
         elif dimension_name == 'urban_rural':
-            # Need provider table columns
-            provider_cols = find_table('provider')
+            # Need phd_de_providers table columns - look for URBAN_RURAL column
+            provider_cols = find_table('phd_de_providers')
             if provider_cols:
-                for col_name in provider_cols.keys():
-                    if 'location' in col_name.lower() or 'urban' in col_name.lower() or 'rural' in col_name.lower():
-                        result['location_type_column'] = col_name
-                        break
-            # Also need prov_id from phd_de_patdemo for bridge join
+                # Try exact match first
+                if 'URBAN_RURAL' in provider_cols:
+                    result['location_type_column'] = 'URBAN_RURAL'
+                else:
+                    # Fallback to case-insensitive search
+                    for col_name in provider_cols.keys():
+                        if col_name.upper() == 'URBAN_RURAL' or ('urban' in col_name.lower() and 'rural' in col_name.lower()):
+                            result['location_type_column'] = col_name
+                            break
+            # Also need PROV_ID from phd_de_patdemo for bridge join
             patdemo_cols = find_table('phd_de_patdemo')
             if patdemo_cols:
-                # Look for PROVIDER_KEY or PROV_ID (they mean the same thing)
+                # Look for PROV_ID (join key to phd_de_providers)
                 prov_col = None
                 for col_name in patdemo_cols.keys():
                     col_upper = col_name.upper()
-                    if col_upper == 'PROVIDER_KEY' or col_upper == 'PROV_ID':
+                    if col_upper == 'PROV_ID':
                         prov_col = col_name
                         break
-                    elif 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                    elif 'prov' in col_name.lower() and 'id' in col_name.lower():
                         prov_col = col_name
                         break
                 if prov_col:
                     result['prov_id_column'] = prov_col
         
         elif dimension_name == 'teaching':
-            provider_cols = find_table('provider')
+            # Need phd_de_providers table columns - look for TEACHING column
+            provider_cols = find_table('phd_de_providers')
             if provider_cols:
-                for col_name in provider_cols.keys():
-                    if 'teach' in col_name.lower() or 'train' in col_name.lower():
-                        result['teaching_flag_column'] = col_name
-                        break
+                # Try exact match first
+                if 'TEACHING' in provider_cols:
+                    result['teaching_flag_column'] = 'TEACHING'
+                else:
+                    # Fallback to case-insensitive search
+                    for col_name in provider_cols.keys():
+                        if col_name.upper() == 'TEACHING' or ('teach' in col_name.lower() or 'train' in col_name.lower()):
+                            result['teaching_flag_column'] = col_name
+                            break
+            # Also need PROV_ID from phd_de_patdemo for bridge join
             patdemo_cols = find_table('phd_de_patdemo')
             if patdemo_cols:
-                # Look for PROVIDER_KEY or PROV_ID (they mean the same thing)
+                # Look for PROV_ID (join key to phd_de_providers)
                 prov_col = None
                 for col_name in patdemo_cols.keys():
                     col_upper = col_name.upper()
-                    if col_upper == 'PROVIDER_KEY' or col_upper == 'PROV_ID':
+                    if col_upper == 'PROV_ID':
                         prov_col = col_name
                         break
-                    elif 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                    elif 'prov' in col_name.lower() and 'id' in col_name.lower():
                         prov_col = col_name
                         break
                 if prov_col:
                     result['prov_id_column'] = prov_col
         
         elif dimension_name == 'bed_count':
-            provider_cols = find_table('provider')
+            # Need phd_de_providers table columns - look for BEDS_GRP column
+            provider_cols = find_table('phd_de_providers')
             if provider_cols:
-                for col_name in provider_cols.keys():
-                    if 'bed' in col_name.lower() or 'beds' in col_name.lower():
-                        result['bed_count_column'] = col_name
-                        break
+                # Try exact match first
+                if 'BEDS_GRP' in provider_cols:
+                    result['bed_count_column'] = 'BEDS_GRP'
+                else:
+                    # Fallback to case-insensitive search
+                    for col_name in provider_cols.keys():
+                        if col_name.upper() == 'BEDS_GRP' or ('beds' in col_name.lower() and 'grp' in col_name.lower()):
+                            result['bed_count_column'] = col_name
+                            break
+            # Also need PROV_ID from phd_de_patdemo for bridge join
             patdemo_cols = find_table('phd_de_patdemo')
             if patdemo_cols:
-                # Look for PROVIDER_KEY or PROV_ID (they mean the same thing)
+                # Look for PROV_ID (join key to phd_de_providers)
                 prov_col = None
                 for col_name in patdemo_cols.keys():
                     col_upper = col_name.upper()
-                    if col_upper == 'PROVIDER_KEY' or col_upper == 'PROV_ID':
+                    if col_upper == 'PROV_ID':
                         prov_col = col_name
                         break
-                    elif 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                    elif 'prov' in col_name.lower() and 'id' in col_name.lower():
                         prov_col = col_name
                         break
                 if prov_col:

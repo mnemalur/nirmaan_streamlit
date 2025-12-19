@@ -423,7 +423,7 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             WHERE d.GENDER IS NOT NULL
-            GROUP BY gender
+            GROUP BY d.GENDER
             ORDER BY patient_count DESC
         """
         
@@ -437,7 +437,7 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             WHERE d.race IS NOT NULL
-            GROUP BY race
+            GROUP BY d.race
             ORDER BY patient_count DESC
         """
         
@@ -451,7 +451,7 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             WHERE d.HISPANIC_IND IS NOT NULL
-            GROUP BY ethnicity
+            GROUP BY d.HISPANIC_IND
             ORDER BY patient_count DESC
         """
         
@@ -467,7 +467,7 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             WHERE d.I_O_IND IS NOT NULL
-            GROUP BY visit_level
+            GROUP BY d.I_O_IND
             ORDER BY encounter_count DESC
         """
         
@@ -482,7 +482,7 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             WHERE d.ADM_TYPE IS NOT NULL
-            GROUP BY admit_type
+            GROUP BY d.ADM_TYPE
             ORDER BY encounter_count DESC
         """
         
@@ -497,17 +497,17 @@ class DimensionAnalysisService:
             JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             WHERE d.PAT_TYPE IS NOT NULL
-            GROUP BY admit_source
+            GROUP BY d.PAT_TYPE
             ORDER BY encounter_count DESC
         """
         
-        # 8. Urban/Rural (use phd_de_patdemo as bridge to provider table)
+        # 7. Urban/Rural (Site-level from phd_de_providers via bridge join - URBAN_RURAL column)
         queries['urban_rural'] = f"""
             SELECT 
                 CASE 
-                    WHEN p.location_type IN ('Urban', 'URBAN') THEN 'Urban'
-                    WHEN p.location_type IN ('Rural', 'RURAL') THEN 'Rural'
-                    ELSE COALESCE(p.location_type, 'Unknown')
+                    WHEN p.URBAN_RURAL IN ('Urban', 'URBAN') THEN 'Urban'
+                    WHEN p.URBAN_RURAL IN ('Rural', 'RURAL') THEN 'Rural'
+                    ELSE COALESCE(p.URBAN_RURAL, 'Unknown')
                 END as location_type,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
@@ -516,17 +516,18 @@ class DimensionAnalysisService:
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             JOIN {config.patient_table_prefix}.phd_de_providers p
                 ON d.PROV_ID = p.PROV_ID
-            GROUP BY location_type
+            WHERE p.URBAN_RURAL IS NOT NULL
+            GROUP BY p.URBAN_RURAL
             ORDER BY patient_count DESC
         """
         
-        # 9. Teaching Status (use phd_de_patdemo as bridge to provider table)
+        # 8. Teaching Status (Site-level from phd_de_providers via bridge join - TEACHING column)
         queries['teaching'] = f"""
             SELECT 
                 CASE 
-                    WHEN p.teaching_flag = 1 OR p.teaching_flag = 'Y' OR UPPER(p.teaching_flag) = 'YES' THEN 'Teaching'
-                    WHEN p.teaching_flag = 0 OR p.teaching_flag = 'N' OR UPPER(p.teaching_flag) = 'NO' THEN 'Non-Teaching'
-                    ELSE 'Unknown'
+                    WHEN p.TEACHING = 1 OR p.TEACHING = 'Y' OR UPPER(p.TEACHING) = 'YES' THEN 'Teaching'
+                    WHEN p.TEACHING = 0 OR p.TEACHING = 'N' OR UPPER(p.TEACHING) = 'NO' THEN 'Non-Teaching'
+                    ELSE COALESCE(p.TEACHING, 'Unknown')
                 END as teaching_status,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
@@ -535,20 +536,15 @@ class DimensionAnalysisService:
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             JOIN {config.patient_table_prefix}.phd_de_providers p
                 ON d.PROV_ID = p.PROV_ID
-            GROUP BY teaching_status
+            WHERE p.TEACHING IS NOT NULL
+            GROUP BY p.TEACHING
             ORDER BY patient_count DESC
         """
         
-        # 10. Bed Count Groups (use phd_de_patdemo as bridge to provider table)
+        # 9. Bed Count Groups (Site-level from phd_de_providers via bridge join - BEDS_GRP column)
         queries['bed_count'] = f"""
             SELECT 
-                CASE 
-                    WHEN p.bed_count < 100 THEN '<100'
-                    WHEN p.bed_count BETWEEN 100 AND 299 THEN '100-299'
-                    WHEN p.bed_count BETWEEN 300 AND 499 THEN '300-499'
-                    WHEN p.bed_count >= 500 THEN '500+'
-                    ELSE 'Unknown'
-                END as bed_count_group,
+                COALESCE(p.BEDS_GRP, 'Unknown') as bed_count_group,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
@@ -556,16 +552,9 @@ class DimensionAnalysisService:
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             JOIN {config.patient_table_prefix}.phd_de_providers p
                 ON d.PROV_ID = p.PROV_ID
-            WHERE p.bed_count IS NOT NULL
-            GROUP BY bed_count_group
-            ORDER BY 
-                CASE bed_count_group
-                    WHEN '<100' THEN 1
-                    WHEN '100-299' THEN 2
-                    WHEN '300-499' THEN 3
-                    WHEN '500+' THEN 4
-                    ELSE 5
-                END
+            WHERE p.BEDS_GRP IS NOT NULL
+            GROUP BY p.BEDS_GRP
+            ORDER BY patient_count DESC
         """
         
         # Execute all queries in parallel
