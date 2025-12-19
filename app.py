@@ -1328,15 +1328,10 @@ def display_dimension_results(results: dict):
                 ])
                 fig.update_layout(title='Gender', height=250, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Gender Data", expanded=False):
-                    st.dataframe(gender_df, use_container_width=True, hide_index=True)
             elif not gender_df.empty:
                 st.warning(f"Missing columns: {list(gender_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
-                    st.dataframe(gender_df, use_container_width=True, hide_index=True)
     
-    with demo_col3:
+    with demo_col2:
         # Race
         if dimensions.get('race'):
             race_df = pd.DataFrame(dimensions['race'])
@@ -1352,15 +1347,10 @@ def display_dimension_results(results: dict):
                 )
                 fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Race Data", expanded=False):
-                    st.dataframe(race_df, use_container_width=True, hide_index=True)
             elif not race_df.empty:
                 st.warning(f"Missing columns: {list(race_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
-                    st.dataframe(race_df, use_container_width=True, hide_index=True)
     
-    with demo_col4:
+    with demo_col3:
         # Ethnicity
         if dimensions.get('ethnicity'):
             ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
@@ -1375,12 +1365,30 @@ def display_dimension_results(results: dict):
                 ])
                 fig.update_layout(title='Ethnicity', height=250, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Ethnicity Data", expanded=False):
-                    st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
             elif not ethnicity_df.empty:
                 st.warning(f"Missing columns: {list(ethnicity_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
+    
+    # Data tables section (outside columns to avoid nesting)
+    st.markdown("---")
+    with st.expander("📊 View Patient Demographics Data Tables", expanded=False):
+        data_col1, data_col2, data_col3 = st.columns(3)
+        with data_col1:
+            if dimensions.get('gender'):
+                gender_df = pd.DataFrame(dimensions['gender'])
+                if not gender_df.empty:
+                    st.markdown("**Gender**")
+                    st.dataframe(gender_df, use_container_width=True, hide_index=True)
+        with data_col2:
+            if dimensions.get('race'):
+                race_df = pd.DataFrame(dimensions['race'])
+                if not race_df.empty:
+                    st.markdown("**Race**")
+                    st.dataframe(race_df, use_container_width=True, hide_index=True)
+        with data_col3:
+            if dimensions.get('ethnicity'):
+                ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
+                if not ethnicity_df.empty:
+                    st.markdown("**Ethnicity**")
                     st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
     
     # Visit Characteristics Section (left to right)
@@ -1403,13 +1411,8 @@ def display_dimension_results(results: dict):
                 )
                 fig.update_layout(height=250, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Visit Level Data", expanded=False):
-                    st.dataframe(visit_df, use_container_width=True, hide_index=True)
             elif not visit_df.empty:
                 st.warning(f"Missing columns: {list(visit_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
-                    st.dataframe(visit_df, use_container_width=True, hide_index=True)
     
     with visit_col2:
         # Admit Source
@@ -1427,13 +1430,8 @@ def display_dimension_results(results: dict):
                 )
                 fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Admit Source Data", expanded=False):
-                    st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
             elif not admit_source_df.empty:
                 st.warning(f"Missing columns: {list(admit_source_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
-                    st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
     
     with visit_col3:
         # Admit Type
@@ -1451,12 +1449,30 @@ def display_dimension_results(results: dict):
                 )
                 fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Admit Type Data", expanded=False):
-                    st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
             elif not admit_type_df.empty:
                 st.warning(f"Missing columns: {list(admit_type_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
+    
+    # Data tables section (outside columns to avoid nesting)
+    st.markdown("---")
+    with st.expander("📊 View Visit Characteristics Data Tables", expanded=False):
+        data_col1, data_col2, data_col3 = st.columns(3)
+        with data_col1:
+            if dimensions.get('visit_level'):
+                visit_df = pd.DataFrame(dimensions['visit_level'])
+                if not visit_df.empty:
+                    st.markdown("**Visit Level**")
+                    st.dataframe(visit_df, use_container_width=True, hide_index=True)
+        with data_col2:
+            if dimensions.get('admit_source'):
+                admit_source_df = pd.DataFrame(dimensions['admit_source'])
+                if not admit_source_df.empty:
+                    st.markdown("**Admit Source**")
+                    st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
+        with data_col3:
+            if dimensions.get('admit_type'):
+                admit_type_df = pd.DataFrame(dimensions['admit_type'])
+                if not admit_type_df.empty:
+                    st.markdown("**Admit Type**")
                     st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
     
     # Site Characteristics Section (left to right)
@@ -1472,18 +1488,14 @@ def display_dimension_results(results: dict):
                     go.Pie(
                         labels=urban_rural_df['location_type'],
                         values=urban_rural_df['patient_count'],
-                        hole=0.4
+                        hole=0.4,
+                        marker_colors=['rgba(34, 197, 94, 0.8)', 'rgba(251, 191, 36, 0.8)', 'rgba(156, 163, 175, 0.8)']
                     )
                 ])
-                fig.update_layout(title='Urban vs Rural', height=250, margin=dict(l=0, r=0, t=30, b=0))
+                fig.update_layout(title='Urban/Rural', height=250, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Urban/Rural Data", expanded=False):
-                    st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
             elif not urban_rural_df.empty:
                 st.warning(f"Missing columns: {list(urban_rural_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
-                    st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
     
     with site_col2:
         # Teaching Status
@@ -1495,18 +1507,13 @@ def display_dimension_results(results: dict):
                         labels=teaching_df['teaching_status'],
                         values=teaching_df['patient_count'],
                         hole=0.4,
-                        marker_colors=['rgba(59, 130, 246, 0.8)', 'rgba(156, 163, 175, 0.8)', 'rgba(239, 68, 68, 0.8)']
+                        marker_colors=['rgba(139, 92, 246, 0.8)', 'rgba(236, 72, 153, 0.8)', 'rgba(156, 163, 175, 0.8)']
                     )
                 ])
                 fig.update_layout(title='Teaching Status', height=250, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Teaching Status Data", expanded=False):
-                    st.dataframe(teaching_df, use_container_width=True, hide_index=True)
             elif not teaching_df.empty:
                 st.warning(f"Missing columns: {list(teaching_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
-                    st.dataframe(teaching_df, use_container_width=True, hide_index=True)
     
     with site_col3:
         # Bed Count
@@ -1524,12 +1531,30 @@ def display_dimension_results(results: dict):
                 )
                 fig.update_layout(height=250, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("View Bed Count Data", expanded=False):
-                    st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
             elif not bed_count_df.empty:
                 st.warning(f"Missing columns: {list(bed_count_df.columns)}")
-                with st.expander("View Raw Data", expanded=False):
+    
+    # Data tables section (outside columns to avoid nesting)
+    st.markdown("---")
+    with st.expander("📊 View Site Characteristics Data Tables", expanded=False):
+        data_col1, data_col2, data_col3 = st.columns(3)
+        with data_col1:
+            if dimensions.get('urban_rural'):
+                urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
+                if not urban_rural_df.empty:
+                    st.markdown("**Urban/Rural**")
+                    st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
+        with data_col2:
+            if dimensions.get('teaching'):
+                teaching_df = pd.DataFrame(dimensions['teaching'])
+                if not teaching_df.empty:
+                    st.markdown("**Teaching Status**")
+                    st.dataframe(teaching_df, use_container_width=True, hide_index=True)
+        with data_col3:
+            if dimensions.get('bed_count'):
+                bed_count_df = pd.DataFrame(dimensions['bed_count'])
+                if not bed_count_df.empty:
+                    st.markdown("**Bed Count**")
                     st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
 
 
