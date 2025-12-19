@@ -18,7 +18,7 @@ class SchemaDiscoveryService:
     def __init__(self):
         """Initialize connection to SQL Warehouse"""
         if not config.host:
-            raise ValueError("DATABricks_HOST is required")
+            raise ValueError("DATABRICKS_HOST is required")
         if not config.token:
             raise ValueError("DATABRICKS_TOKEN is required")
         if not config.warehouse_id:
@@ -102,6 +102,115 @@ class SchemaDiscoveryService:
         except Exception as e:
             logger.error(f"Error discovering columns for {table}: {str(e)}")
             return []
+    
+    def identify_table_purpose(self, table_name: str, columns: List[Dict]) -> List[str]:
+        """
+        Identify the purpose/type of a table based on its name and columns
+        
+        Args:
+            table_name: Table name
+            columns: List of column dictionaries
+            
+        Returns:
+            List of table purposes (e.g., ['demographics', 'procedures', 'encounters'])
+        """
+        purposes = []
+        table_lower = table_name.lower()
+        column_names = [col['COLUMN_NAME'].lower() for col in columns]
+        
+        # Check table name patterns
+        if 'demo' in table_lower or 'patient' in table_lower:
+            purposes.append('demographics')
+        if 'cpt' in table_lower or 'procedure' in table_lower:
+            purposes.append('procedures')
+        if 'icd' in table_lower or 'diagnosis' in table_lower:
+            purposes.append('diagnoses')
+        if 'encounter' in table_lower or 'visit' in table_lower:
+            purposes.append('encounters')
+        if 'lab' in table_lower or 'test' in table_lower:
+            purposes.append('labs')
+        if 'med' in table_lower or 'drug' in table_lower or 'rx' in table_lower:
+            purposes.append('medications')
+        
+        # Check column patterns
+        demo_columns = ['age', 'gender', 'race', 'ethnicity', 'birth', 'sex']
+        if any(col in ' '.join(column_names) for col in demo_columns):
+            purposes.append('demographics')
+        
+        proc_columns = ['cpt', 'procedure', 'proc_code']
+        if any(col in ' '.join(column_names) for col in proc_columns):
+            purposes.append('procedures')
+        
+        encounter_columns = ['encounter', 'visit', 'admit', 'discharge', 'visit_type']
+        if any(col in ' '.join(column_names) for col in encounter_columns):
+            purposes.append('encounters')
+        
+        # Remove duplicates
+        return list(set(purposes))
+    
+    def get_dimension_table_mapping(self, catalog: str, schema: str) -> Dict[str, List[str]]:
+        """
+        Map dimensions to recommended tables
+        
+        Args:
+            catalog: Catalog name
+            schema: Schema name
+            
+        Returns:
+            Dictionary mapping dimension names to list of recommended table names
+        """
+        tables = self.discover_tables(catalog, schema)
+        
+        dimension_to_tables = {
+            'age_groups': [],
+            'gender': [],
+            'race': [],
+            'ethnicity': [],
+            'visit_level': [],
+            'admit_source': [],
+            'admit_type': [],
+            'urban_rural': [],
+            'teaching': [],
+            'bed_count': [],
+            'procedures': [],
+            'diagnoses': [],
+            'labs': [],
+            'medications': []
+        }
+        
+        for table_info in tables:
+            table_name = table_info['TABLE_NAME']
+            columns = self.discover_columns(catalog, schema, table_name)
+            purposes = self.identify_table_purpose(table_name, columns)
+            
+            # Map purposes to dimensions
+            if 'demographics' in purposes:
+                dimension_to_tables['age_groups'].append(table_name)
+                dimension_to_tables['gender'].append(table_name)
+                dimension_to_tables['race'].append(table_name)
+                dimension_to_tables['ethnicity'].append(table_name)
+                dimension_to_tables['urban_rural'].append(table_name)
+                dimension_to_tables['teaching'].append(table_name)
+                dimension_to_tables['bed_count'].append(table_name)
+            
+            if 'encounters' in purposes:
+                dimension_to_tables['visit_level'].append(table_name)
+                dimension_to_tables['admit_source'].append(table_name)
+                dimension_to_tables['admit_type'].append(table_name)
+            
+            if 'procedures' in purposes:
+                dimension_to_tables['procedures'].append(table_name)
+            
+            if 'diagnoses' in purposes:
+                dimension_to_tables['diagnoses'].append(table_name)
+            
+            if 'labs' in purposes:
+                dimension_to_tables['labs'].append(table_name)
+            
+            if 'medications' in purposes:
+                dimension_to_tables['medications'].append(table_name)
+        
+        return dimension_to_tables
     
     def get_schema_summary(self, catalog: str, schema: str) -> Dict:
         """

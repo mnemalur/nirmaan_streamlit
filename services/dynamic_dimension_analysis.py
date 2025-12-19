@@ -4,7 +4,7 @@ Uses schema discovery + LLM to generate dimension queries dynamically in paralle
 Avoids Genie's linear limitation by generating all SQL queries upfront, then executing in parallel
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from services.schema_discovery import SchemaDiscoveryService
@@ -124,7 +124,8 @@ Patient Schema: {config.patient_catalog}.{config.patient_schema}
         
         if recommended_tables:
             prompt += f"- For '{dimension_name}', you MUST use one of these tables: {', '.join(recommended_tables)}\n"
-            prompt += f"- Primary recommended table: **{recommended_tables[0]}**\n"
+            if len(recommended_tables) > 0:
+                prompt += f"- Primary recommended table: **{recommended_tables[0]}**\n"
         else:
             prompt += f"- For '{dimension_name}', use the most appropriate table based on column names\n"
         
@@ -181,8 +182,8 @@ ORDER BY
 ```
 
 CRITICAL Syntax Rules:
-- Cohort table: Use exactly as shown: {cohort_table_quoted}
-- Patient tables: Use catalog.schema.tablename (NO backticks) - Example: {config.patient_catalog}.{config.patient_schema}.patdemo
+- Cohort table: Use exactly as shown: {cohort_table_quoted} (already has backticks)
+- Patient tables: Use catalog.schema.tablename format (NO backticks) - Example: {config.patient_catalog}.{config.patient_schema}.patdemo
 - JOIN: Standard SQL JOIN syntax
 - Window functions: SUM(COUNT(DISTINCT ...)) OVER() for percentage
 - CASE: Standard SQL CASE WHEN ... THEN ... ELSE ... END
@@ -191,12 +192,30 @@ CRITICAL Syntax Rules:
 
 Generate a SQL query that:
 1. **MUST** join the cohort table ({cohort_table_quoted}) with the RECOMMENDED table(s) above using {join_key}
-2. Uses Unity Catalog format: `catalog`.`schema`.`table` with backticks
+2. Uses Unity Catalog format for patient tables: catalog.schema.tablename (NO backticks for standard names)
 3. Groups by the {dimension_name} dimension (create appropriate CASE statements for grouping)
-4. Counts distinct patients using COUNT(DISTINCT c.{join_key})
-5. Calculates percentages using window functions: ROUND(COUNT(DISTINCT c.{join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{join_key})) OVER(), 2)
-6. Orders results appropriately
-7. Handles NULL values appropriately (use COALESCE or IS NOT NULL)
+4. Counts distinct patients using COUNT(DISTINCT c.{join_key}) AS patient_count
+5. Calculates percentages using window functions: ROUND(COUNT(DISTINCT c.{join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{join_key})) OVER(), 2) AS percentage
+6. For encounter dimensions (visit_level, admit_source, admit_type), also count encounters: COUNT(DISTINCT e.encounter_id) AS encounter_count
+7. Orders results appropriately
+8. Handles NULL values appropriately (use COALESCE or IS NOT NULL)
+
+⚠️ CRITICAL: Column naming requirements (must match exactly):
+- Dimension column name: 
+  * age_groups → 'age_group'
+  * gender → 'gender'
+  * race → 'race'
+  * ethnicity → 'ethnicity'
+  * visit_level → 'visit_level'
+  * admit_source → 'admit_source'
+  * admit_type → 'admit_type'
+  * urban_rural → 'location_type'
+  * teaching → 'teaching_status'
+  * bed_count → 'bed_count_group'
+- Count column: Always name it 'patient_count' (or 'encounter_count' for visit_level, admit_source, admit_type)
+- Percentage column: Always name it 'percentage'
+
+The visualization code expects these exact column names!
 
 Return ONLY the SQL query, no markdown code blocks, no explanations, just the SQL.
 The query must follow Databricks Unity Catalog SQL syntax exactly as shown in the example above.
@@ -314,12 +333,16 @@ The query must follow Databricks Unity Catalog SQL syntax exactly as shown in th
         
         # Step 1: Get schema context (cached)
         logger.info("Getting schema context (cached if available)...")
-        schema_context = self.get_schema_context(
-            config.patient_catalog,
-            config.patient_schema,
-            use_cache=True
-        )
-        logger.info(f"Schema context ready ({len(schema_context)} chars)")
+        try:
+            schema_context = self.get_schema_context(
+                config.patient_catalog,
+                config.patient_schema,
+                use_cache=True
+            )
+            logger.info(f"Schema context ready ({len(schema_context)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to get schema context: {str(e)}")
+            raise ValueError(f"Schema discovery failed: {str(e)}. Please check your DATABRICKS_HOST, DATABRICKS_TOKEN, and SQL_WAREHOUSE_ID configuration.")
         
         # Step 2: Generate ALL dimension SQL queries in parallel using LLM
         logger.info(f"Generating {len(dimension_specs)} dimension SQL queries in parallel...")

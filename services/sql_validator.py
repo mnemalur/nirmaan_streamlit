@@ -150,7 +150,6 @@ class SQLValidator:
         tables_used = []
         
         # Extract table names from SQL (basic pattern matching)
-        import re
         # Look for table references after FROM and JOIN
         from_pattern = r'FROM\s+[`"]?(\w+)[`"]?'
         join_pattern = r'JOIN\s+[`"]?(\w+)[`"]?'

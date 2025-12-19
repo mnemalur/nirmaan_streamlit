@@ -342,7 +342,12 @@ class DimensionAnalysisService:
                 rows = cursor.fetchall()
                 return [dict(zip(columns, row)) for row in rows]
     
-    def analyze_dimensions(self, cohort_table: str, has_medrec_key: bool = False) -> Dict:
+    def analyze_dimensions(
+        self, 
+        cohort_table: str, 
+        has_medrec_key: bool = False,
+        use_dynamic: bool = True
+    ) -> Dict:
         """
         Analyze cohort across all dimensions in parallel
         
@@ -361,7 +366,7 @@ class DimensionAnalysisService:
         Args:
             cohort_table: Full table name (catalog.schema.table) - will be quoted in SQL
             has_medrec_key: Whether cohort table has medrec_key column
-            use_dynamic: If True, use dynamic schema discovery + LLM/Genie (requires dynamic_dimension_analysis)
+            use_dynamic: If True, use dynamic schema discovery + LLM (default: True)
             
         Returns:
             Dictionary with dimension analysis results

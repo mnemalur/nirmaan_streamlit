@@ -1269,34 +1269,39 @@ def display_dimension_results(results: dict):
         st.info("No dimension data available")
         return
     
-    # Demographics Section
-    st.subheader("👥 Demographics")
-    col1, col2 = st.columns(2)
+    # Patient-Level Demographics Section (left to right)
+    st.subheader("👥 Patient Demographics")
+    demo_col1, demo_col2, demo_col3, demo_col4 = st.columns(4)
     
-    with col1:
+    with demo_col1:
         # Age Groups
         if dimensions.get('age_groups'):
             age_df = pd.DataFrame(dimensions['age_groups'])
-            if not age_df.empty:
+            if not age_df.empty and 'age_group' in age_df.columns and 'patient_count' in age_df.columns:
                 fig = px.bar(
                     age_df, 
                     x='age_group', 
                     y='patient_count',
                     title='Age Distribution',
-                    labels={'patient_count': 'Patient Count', 'age_group': 'Age Group'},
+                    labels={'patient_count': 'Count', 'age_group': 'Age Group'},
                     color='patient_count',
                     color_continuous_scale='Blues'
                 )
-                fig.update_layout(height=300, showlegend=False)
+                fig.update_layout(height=250, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Age Data", expanded=False):
                     st.dataframe(age_df, use_container_width=True, hide_index=True)
-        
+            elif not age_df.empty:
+                st.warning(f"Missing columns: {list(age_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(age_df, use_container_width=True, hide_index=True)
+    
+    with demo_col2:
         # Gender
         if dimensions.get('gender'):
             gender_df = pd.DataFrame(dimensions['gender'])
-            if not gender_df.empty:
+            if not gender_df.empty and 'gender' in gender_df.columns and 'patient_count' in gender_df.columns:
                 fig = go.Figure(data=[
                     go.Pie(
                         labels=gender_df['gender'],
@@ -1305,36 +1310,45 @@ def display_dimension_results(results: dict):
                         marker_colors=['rgba(59, 130, 246, 0.8)', 'rgba(236, 72, 153, 0.8)', 'rgba(156, 163, 175, 0.8)']
                     )
                 ])
-                fig.update_layout(title='Gender Distribution', height=300)
+                fig.update_layout(title='Gender', height=250, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Gender Data", expanded=False):
                     st.dataframe(gender_df, use_container_width=True, hide_index=True)
+            elif not gender_df.empty:
+                st.warning(f"Missing columns: {list(gender_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(gender_df, use_container_width=True, hide_index=True)
     
-    with col2:
+    with demo_col3:
         # Race
         if dimensions.get('race'):
             race_df = pd.DataFrame(dimensions['race'])
-            if not race_df.empty:
+            if not race_df.empty and 'race' in race_df.columns and 'patient_count' in race_df.columns:
                 fig = px.bar(
-                    race_df.head(10),  # Top 10 races
+                    race_df.head(8),  # Top 8 races
                     x='race',
                     y='patient_count',
-                    title='Race Distribution (Top 10)',
-                    labels={'patient_count': 'Patient Count', 'race': 'Race'},
+                    title='Race (Top 8)',
+                    labels={'patient_count': 'Count', 'race': 'Race'},
                     color='patient_count',
                     color_continuous_scale='Greens'
                 )
-                fig.update_layout(height=300, showlegend=False, xaxis_tickangle=-45)
+                fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Race Data", expanded=False):
                     st.dataframe(race_df, use_container_width=True, hide_index=True)
-        
+            elif not race_df.empty:
+                st.warning(f"Missing columns: {list(race_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(race_df, use_container_width=True, hide_index=True)
+    
+    with demo_col4:
         # Ethnicity
         if dimensions.get('ethnicity'):
             ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
-            if not ethnicity_df.empty:
+            if not ethnicity_df.empty and 'ethnicity' in ethnicity_df.columns and 'patient_count' in ethnicity_df.columns:
                 fig = go.Figure(data=[
                     go.Pie(
                         labels=ethnicity_df['ethnicity'],
@@ -1343,85 +1357,101 @@ def display_dimension_results(results: dict):
                         marker_colors=['rgba(16, 185, 129, 0.8)', 'rgba(245, 158, 11, 0.8)', 'rgba(156, 163, 175, 0.8)']
                     )
                 ])
-                fig.update_layout(title='Ethnicity Distribution', height=300)
+                fig.update_layout(title='Ethnicity', height=250, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Ethnicity Data", expanded=False):
                     st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
+            elif not ethnicity_df.empty:
+                st.warning(f"Missing columns: {list(ethnicity_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
     
-    # Visit Characteristics Section
+    # Visit Characteristics Section (left to right)
     st.subheader("🏥 Visit Characteristics")
-    col1, col2, col3 = st.columns(3)
+    visit_col1, visit_col2, visit_col3 = st.columns(3)
     
-    with col1:
+    with visit_col1:
         # Visit Level
         if dimensions.get('visit_level'):
             visit_df = pd.DataFrame(dimensions['visit_level'])
-            if not visit_df.empty:
+            if not visit_df.empty and 'visit_level' in visit_df.columns and 'encounter_count' in visit_df.columns:
                 fig = px.bar(
                     visit_df,
                     x='visit_level',
                     y='encounter_count',
-                    title='Visit Level Distribution',
-                    labels={'encounter_count': 'Encounter Count', 'visit_level': 'Visit Level'},
+                    title='Visit Level',
+                    labels={'encounter_count': 'Count', 'visit_level': 'Visit Level'},
                     color='encounter_count',
                     color_continuous_scale='Purples'
                 )
-                fig.update_layout(height=250, showlegend=False)
+                fig.update_layout(height=250, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Visit Level Data", expanded=False):
                     st.dataframe(visit_df, use_container_width=True, hide_index=True)
+            elif not visit_df.empty:
+                st.warning(f"Missing columns: {list(visit_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(visit_df, use_container_width=True, hide_index=True)
     
-    with col2:
+    with visit_col2:
         # Admit Source
         if dimensions.get('admit_source'):
             admit_source_df = pd.DataFrame(dimensions['admit_source'])
-            if not admit_source_df.empty:
+            if not admit_source_df.empty and 'admit_source' in admit_source_df.columns and 'encounter_count' in admit_source_df.columns:
                 fig = px.bar(
                     admit_source_df.head(8),  # Top 8
                     x='admit_source',
                     y='encounter_count',
                     title='Admit Source (Top 8)',
-                    labels={'encounter_count': 'Encounter Count', 'admit_source': 'Admit Source'},
+                    labels={'encounter_count': 'Count', 'admit_source': 'Admit Source'},
                     color='encounter_count',
                     color_continuous_scale='Oranges'
                 )
-                fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45)
+                fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Admit Source Data", expanded=False):
                     st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
+            elif not admit_source_df.empty:
+                st.warning(f"Missing columns: {list(admit_source_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
     
-    with col3:
+    with visit_col3:
         # Admit Type
         if dimensions.get('admit_type'):
             admit_type_df = pd.DataFrame(dimensions['admit_type'])
-            if not admit_type_df.empty:
+            if not admit_type_df.empty and 'admit_type' in admit_type_df.columns and 'encounter_count' in admit_type_df.columns:
                 fig = px.bar(
                     admit_type_df,
                     x='admit_type',
                     y='encounter_count',
-                    title='Admit Type Distribution',
-                    labels={'encounter_count': 'Encounter Count', 'admit_type': 'Admit Type'},
+                    title='Admit Type',
+                    labels={'encounter_count': 'Count', 'admit_type': 'Admit Type'},
                     color='encounter_count',
                     color_continuous_scale='Reds'
                 )
-                fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45)
+                fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Admit Type Data", expanded=False):
                     st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
+            elif not admit_type_df.empty:
+                st.warning(f"Missing columns: {list(admit_type_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
     
-    # Site Characteristics Section
+    # Site Characteristics Section (left to right)
     st.subheader("🏛️ Site Characteristics")
-    col1, col2, col3 = st.columns(3)
+    site_col1, site_col2, site_col3 = st.columns(3)
     
-    with col1:
+    with site_col1:
         # Urban/Rural
         if dimensions.get('urban_rural'):
             urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
-            if not urban_rural_df.empty:
+            if not urban_rural_df.empty and 'location_type' in urban_rural_df.columns and 'patient_count' in urban_rural_df.columns:
                 fig = go.Figure(data=[
                     go.Pie(
                         labels=urban_rural_df['location_type'],
@@ -1429,17 +1459,21 @@ def display_dimension_results(results: dict):
                         hole=0.4
                     )
                 ])
-                fig.update_layout(title='Urban vs Rural', height=250)
+                fig.update_layout(title='Urban vs Rural', height=250, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Urban/Rural Data", expanded=False):
                     st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
+            elif not urban_rural_df.empty:
+                st.warning(f"Missing columns: {list(urban_rural_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
     
-    with col2:
+    with site_col2:
         # Teaching Status
         if dimensions.get('teaching'):
             teaching_df = pd.DataFrame(dimensions['teaching'])
-            if not teaching_df.empty:
+            if not teaching_df.empty and 'teaching_status' in teaching_df.columns and 'patient_count' in teaching_df.columns:
                 fig = go.Figure(data=[
                     go.Pie(
                         labels=teaching_df['teaching_status'],
@@ -1448,30 +1482,38 @@ def display_dimension_results(results: dict):
                         marker_colors=['rgba(59, 130, 246, 0.8)', 'rgba(156, 163, 175, 0.8)', 'rgba(239, 68, 68, 0.8)']
                     )
                 ])
-                fig.update_layout(title='Teaching Status', height=250)
+                fig.update_layout(title='Teaching Status', height=250, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Teaching Status Data", expanded=False):
                     st.dataframe(teaching_df, use_container_width=True, hide_index=True)
+            elif not teaching_df.empty:
+                st.warning(f"Missing columns: {list(teaching_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
+                    st.dataframe(teaching_df, use_container_width=True, hide_index=True)
     
-    with col3:
+    with site_col3:
         # Bed Count
         if dimensions.get('bed_count'):
             bed_count_df = pd.DataFrame(dimensions['bed_count'])
-            if not bed_count_df.empty:
+            if not bed_count_df.empty and 'bed_count_group' in bed_count_df.columns and 'patient_count' in bed_count_df.columns:
                 fig = px.bar(
                     bed_count_df,
                     x='bed_count_group',
                     y='patient_count',
                     title='Bed Count Groups',
-                    labels={'patient_count': 'Patient Count', 'bed_count_group': 'Bed Count Group'},
+                    labels={'patient_count': 'Count', 'bed_count_group': 'Bed Count'},
                     color='patient_count',
                     color_continuous_scale='Teal'
                 )
-                fig.update_layout(height=250, showlegend=False)
+                fig.update_layout(height=250, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("View Bed Count Data", expanded=False):
+                    st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
+            elif not bed_count_df.empty:
+                st.warning(f"Missing columns: {list(bed_count_df.columns)}")
+                with st.expander("View Raw Data", expanded=False):
                     st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
 
 
