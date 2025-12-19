@@ -69,6 +69,12 @@ if 'genie_error' not in st.session_state:
     st.session_state.genie_error = None
 if 'genie_running' not in st.session_state:
     st.session_state.genie_running = False
+if 'cohort_table_info' not in st.session_state:
+    st.session_state.cohort_table_info = None
+if 'cohort_table_creating' not in st.session_state:
+    st.session_state.cohort_table_creating = False
+if 'cohort_table_error' not in st.session_state:
+    st.session_state.cohort_table_error = None
 
 
 def initialize_services():
@@ -132,11 +138,13 @@ def initialize_services():
         from services.cohort_manager import CohortManager
         from services.intent_service import IntentService
         from services.cohort_agent import CohortAgent
+        from services.dimension_analysis import DimensionAnalysisService
         
         st.session_state.vector_service = VectorSearchService()
         st.session_state.genie_service = GenieService()
         st.session_state.cohort_manager = CohortManager()
         st.session_state.intent_service = IntentService()
+        st.session_state.dimension_service = DimensionAnalysisService()
         
         # Initialize LangGraph agent (LLM + vector search + Genie + cohort manager)
         st.session_state.cohort_agent = CohortAgent(
@@ -293,6 +301,45 @@ def refine_criteria_with_codes():
     st.session_state.refined_criteria_text = refined_text
 
     return refined_text
+
+
+def create_cohort_table_from_genie_sql():
+    """Create cohort temp table directly from Genie SQL (efficient - uses full query, not sample data)"""
+    genie_result = st.session_state.get("genie_result")
+    if not genie_result:
+        st.session_state.cohort_table_error = "No Genie result available"
+        return
+    
+    sql = genie_result.get("sql")
+    if not sql:
+        st.session_state.cohort_table_error = "No SQL available from Genie result"
+        return
+    
+    if not hasattr(st.session_state, "dimension_service") or st.session_state.dimension_service is None:
+        st.session_state.cohort_table_error = "Dimension analysis service is not initialized"
+        return
+    
+    try:
+        st.session_state.cohort_table_creating = True
+        st.session_state.cohort_table_error = None
+        
+        logger.info("Creating cohort table from Genie SQL (using full query, not sample data)")
+        
+        # Create cohort table directly from SQL
+        session_id = st.session_state.get("session_id", "default")
+        table_info = st.session_state.dimension_service.create_cohort_table_from_sql(
+            session_id, 
+            sql
+        )
+        
+        st.session_state.cohort_table_info = table_info
+        st.session_state.cohort_table_creating = False
+        logger.info(f"Cohort table created successfully: {table_info['cohort_table']} with {table_info['count']} rows")
+        
+    except Exception as e:
+        logger.error(f"Error creating cohort table: {e}", exc_info=True)
+        st.session_state.cohort_table_error = f"Error creating cohort table: {str(e)}"
+        st.session_state.cohort_table_creating = False
 
 
 def run_genie_for_refined_criteria():
@@ -948,6 +995,32 @@ def render_chat_page():
                     f"- Data extraction encountered an issue\n\n"
                     f"You can use the generated SQL above to query the full dataset directly."
                 )
+            
+            # Dimension Analysis (cohort table created automatically in background)
+            st.markdown("---")
+            st.markdown("### 📊 Dimension Analysis")
+            
+            cohort_table_info = st.session_state.get("cohort_table_info")
+            if cohort_table_info:
+                # Table already created, ready for dimension analysis
+                st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
+                # TODO: Add dimension analysis button here (next step)
+            elif st.session_state.get("cohort_table_creating"):
+                # Creating table in background - user doesn't need to know details
+                with st.spinner("Preparing dimension analysis..."):
+                    create_cohort_table_from_genie_sql()
+                    st.rerun()
+            elif st.session_state.get("cohort_table_error"):
+                st.error(f"❌ {st.session_state.cohort_table_error}")
+                if st.button("🔄 Retry", use_container_width=True):
+                    st.session_state.cohort_table_error = None
+                    st.session_state.cohort_table_creating = True
+                    st.rerun()
+            else:
+                # Auto-create table when user clicks to analyze dimensions
+                if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
+                    st.session_state.cohort_table_creating = True
+                    st.rerun()
 
 
 def process_query(query: str):
