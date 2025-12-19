@@ -781,7 +781,7 @@ def render_chat_page():
     genie_result = st.session_state.get("genie_result")
     if genie_result:
         with st.expander("📊 Step 4: Query Results", expanded=True):
-        sql = genie_result.get("sql")
+            sql = genie_result.get("sql")
             data = genie_result.get("data", [])
             row_count = genie_result.get("row_count", 0)
             exec_time = genie_result.get("execution_time")
