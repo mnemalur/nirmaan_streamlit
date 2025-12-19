@@ -320,3 +320,292 @@ class DimensionAnalysisService:
             'count': count,
             'has_medrec_key': has_medrec
         }
+    
+    def _execute_query(self, sql: str) -> List[Dict]:
+        """
+        Execute a SQL query and return results as list of dictionaries
+        
+        Args:
+            sql: SQL query string
+            
+        Returns:
+            List of dictionaries with query results
+        """
+        with connect(
+            server_hostname=self.server_hostname,
+            http_path=self.http_path,
+            access_token=config.token,
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(sql)
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                return [dict(zip(columns, row)) for row in rows]
+    
+    def analyze_dimensions(self, cohort_table: str, has_medrec_key: bool = False) -> Dict:
+        """
+        Analyze cohort across all dimensions in parallel
+        
+        Dimensions analyzed:
+        - Age groups
+        - Gender
+        - Race
+        - Ethnicity
+        - Visit level (Inpatient/Outpatient)
+        - Admit Source
+        - Admit Type
+        - Urban/Rural
+        - Teaching status
+        - Bed count groups
+        
+        Args:
+            cohort_table: Full table name (catalog.schema.table) - will be quoted in SQL
+            has_medrec_key: Whether cohort table has medrec_key column
+            use_dynamic: If True, use dynamic schema discovery + LLM/Genie (requires dynamic_dimension_analysis)
+            
+        Returns:
+            Dictionary with dimension analysis results
+        """
+        # If dynamic mode requested, delegate to dynamic service
+        if use_dynamic:
+            try:
+                from services.dynamic_dimension_analysis import DynamicDimensionAnalysisService
+                dynamic_service = DynamicDimensionAnalysisService()
+                return dynamic_service.analyze_dimensions_dynamically(
+                    cohort_table=cohort_table,
+                    has_medrec_key=has_medrec_key
+                    # Note: No use_genie parameter - we use LLM in parallel, not Genie
+                )
+            except Exception as e:
+                logger.warning(f"Dynamic dimension analysis failed, falling back to hardcoded: {str(e)}")
+                # Fall through to hardcoded queries
+        # Quote table name for SQL
+        catalog_schema_table = cohort_table.split('.')
+        if len(catalog_schema_table) == 3:
+            cohort_table_quoted = f"`{catalog_schema_table[0]}`.`{catalog_schema_table[1]}`.`{catalog_schema_table[2]}`"
+        else:
+            cohort_table_quoted = cohort_table
+        
+        # Determine join key - cohort table uses medrec_key or patient_key
+        # patdemo table uses patient_key (or medrec_key if that's what cohort has)
+        if has_medrec_key:
+            cohort_join_key = "medrec_key"
+            patdemo_join_key = "medrec_key"  # patdemo may have medrec_key
+        else:
+            cohort_join_key = "patient_key"
+            patdemo_join_key = "patient_key"  # patdemo uses patient_key
+        
+        # Build all dimension queries
+        queries = {}
+        
+        # 1. Age Groups
+        queries['age_groups'] = f"""
+            SELECT 
+                CASE 
+                    WHEN d.age < 18 THEN '<18'
+                    WHEN d.age BETWEEN 18 AND 34 THEN '18-34'
+                    WHEN d.age BETWEEN 35 AND 49 THEN '35-49'
+                    WHEN d.age BETWEEN 50 AND 64 THEN '50-64'
+                    WHEN d.age BETWEEN 65 AND 79 THEN '65-79'
+                    ELSE '80+'
+                END as age_group,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.age IS NOT NULL
+            GROUP BY age_group
+            ORDER BY 
+                CASE age_group
+                    WHEN '<18' THEN 1
+                    WHEN '18-34' THEN 2
+                    WHEN '35-49' THEN 3
+                    WHEN '50-64' THEN 4
+                    WHEN '65-79' THEN 5
+                    WHEN '80+' THEN 6
+                END
+        """
+        
+        # 2. Gender
+        queries['gender'] = f"""
+            SELECT 
+                CASE 
+                    WHEN d.gender = 'M' THEN 'Male'
+                    WHEN d.gender = 'F' THEN 'Female'
+                    ELSE COALESCE(d.gender, 'Unknown')
+                END as gender,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            GROUP BY gender
+            ORDER BY patient_count DESC
+        """
+        
+        # 3. Race
+        queries['race'] = f"""
+            SELECT 
+                COALESCE(d.race, 'Unknown') as race,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            GROUP BY race
+            ORDER BY patient_count DESC
+        """
+        
+        # 4. Ethnicity
+        queries['ethnicity'] = f"""
+            SELECT 
+                COALESCE(d.ethnicity, 'Unknown') as ethnicity,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            GROUP BY ethnicity
+            ORDER BY patient_count DESC
+        """
+        
+        # 5. Visit Level (Inpatient/Outpatient) - assuming encounter table exists
+        # Note: This may need adjustment based on actual table/column names
+        queries['visit_level'] = f"""
+            SELECT 
+                COALESCE(e.visit_type, e.encounter_type, e.visit_class, 'Unknown') as visit_level,
+                COUNT(DISTINCT e.encounter_id) as encounter_count,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.encounter e 
+                ON c.{cohort_join_key} = e.{cohort_join_key}
+            GROUP BY visit_level
+            ORDER BY encounter_count DESC
+        """
+        
+        # 6. Admit Source
+        queries['admit_source'] = f"""
+            SELECT 
+                COALESCE(e.admit_source, 'Unknown') as admit_source,
+                COUNT(DISTINCT e.encounter_id) as encounter_count,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.encounter e 
+                ON c.{cohort_join_key} = e.{cohort_join_key}
+            WHERE e.admit_source IS NOT NULL
+            GROUP BY admit_source
+            ORDER BY encounter_count DESC
+        """
+        
+        # 7. Admit Type
+        queries['admit_type'] = f"""
+            SELECT 
+                COALESCE(e.admit_type, 'Unknown') as admit_type,
+                COUNT(DISTINCT e.encounter_id) as encounter_count,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.encounter e 
+                ON c.{cohort_join_key} = e.{cohort_join_key}
+            WHERE e.admit_type IS NOT NULL
+            GROUP BY admit_type
+            ORDER BY encounter_count DESC
+        """
+        
+        # 8. Urban/Rural
+        queries['urban_rural'] = f"""
+            SELECT 
+                CASE 
+                    WHEN d.location_type IN ('Urban', 'URBAN') THEN 'Urban'
+                    WHEN d.location_type IN ('Rural', 'RURAL') THEN 'Rural'
+                    ELSE COALESCE(d.location_type, 'Unknown')
+                END as location_type,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            GROUP BY location_type
+            ORDER BY patient_count DESC
+        """
+        
+        # 9. Teaching Status
+        queries['teaching'] = f"""
+            SELECT 
+                CASE 
+                    WHEN d.teaching_flag = 1 OR d.teaching_flag = 'Y' OR UPPER(d.teaching_flag) = 'YES' THEN 'Teaching'
+                    WHEN d.teaching_flag = 0 OR d.teaching_flag = 'N' OR UPPER(d.teaching_flag) = 'NO' THEN 'Non-Teaching'
+                    ELSE 'Unknown'
+                END as teaching_status,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            GROUP BY teaching_status
+            ORDER BY patient_count DESC
+        """
+        
+        # 10. Bed Count Groups
+        queries['bed_count'] = f"""
+            SELECT 
+                CASE 
+                    WHEN d.bed_count < 100 THEN '<100'
+                    WHEN d.bed_count BETWEEN 100 AND 299 THEN '100-299'
+                    WHEN d.bed_count BETWEEN 300 AND 499 THEN '300-499'
+                    WHEN d.bed_count >= 500 THEN '500+'
+                    ELSE 'Unknown'
+                END as bed_count_group,
+                COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
+                ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
+            FROM {cohort_table_quoted} c
+            JOIN {config.patient_table_prefix}.patdemo d 
+                ON c.{cohort_join_key} = d.{patdemo_join_key}
+            WHERE d.bed_count IS NOT NULL
+            GROUP BY bed_count_group
+            ORDER BY 
+                CASE bed_count_group
+                    WHEN '<100' THEN 1
+                    WHEN '100-299' THEN 2
+                    WHEN '300-499' THEN 3
+                    WHEN '500+' THEN 4
+                    ELSE 5
+                END
+        """
+        
+        # Execute all queries in parallel
+        results = {}
+        errors = {}
+        
+        def execute_dimension_query(dim_name: str, sql: str):
+            """Execute a single dimension query and return result"""
+            try:
+                result = self._execute_query(sql)
+                return (dim_name, result, None)
+            except Exception as e:
+                logger.error(f"Error executing {dim_name} query: {str(e)}")
+                return (dim_name, [], str(e))
+        
+        # Use ThreadPoolExecutor for parallel execution
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(execute_dimension_query, name, sql): name 
+                      for name, sql in queries.items()}
+            
+            for future in as_completed(futures):
+                dim_name, result, error = future.result()
+                if error:
+                    errors[dim_name] = error
+                    results[dim_name] = []
+                else:
+                    results[dim_name] = result
+        
+        logger.info(f"Dimension analysis completed. Success: {len([r for r in results.values() if r])}, Errors: {len(errors)}")
+        
+        return {
+            'dimensions': results,
+            'errors': errors,
+            'cohort_table': cohort_table
+        }

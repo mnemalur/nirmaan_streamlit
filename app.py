@@ -75,6 +75,10 @@ if 'cohort_table_creating' not in st.session_state:
     st.session_state.cohort_table_creating = False
 if 'cohort_table_error' not in st.session_state:
     st.session_state.cohort_table_error = None
+if 'dimension_results' not in st.session_state:
+    st.session_state.dimension_results = None
+if 'dimension_analyzing' not in st.session_state:
+    st.session_state.dimension_analyzing = False
 
 
 def initialize_services():
@@ -145,6 +149,20 @@ def initialize_services():
         st.session_state.cohort_manager = CohortManager()
         st.session_state.intent_service = IntentService()
         st.session_state.dimension_service = DimensionAnalysisService()
+        
+        # Pre-discover schema for faster dimension analysis (cache it)
+        try:
+            from services.schema_discovery import SchemaDiscoveryService
+            schema_service = SchemaDiscoveryService()
+            # Cache schema context upfront (non-blocking, happens in background)
+            schema_context = schema_service.get_schema_context_for_llm(
+                config.patient_catalog,
+                config.patient_schema
+            )
+            logger.info(f"Schema context cached ({len(schema_context)} chars)")
+        except Exception as e:
+            logger.warning(f"Could not pre-discover schema: {str(e)}")
+            # Non-critical, dimension analysis will discover schema on-demand
         
         # Initialize LangGraph agent (LLM + vector search + Genie + cohort manager)
         st.session_state.cohort_agent = CohortAgent(
@@ -1001,10 +1019,23 @@ def render_chat_page():
             st.markdown("### 📊 Dimension Analysis")
             
             cohort_table_info = st.session_state.get("cohort_table_info")
+            dimension_results = st.session_state.get("dimension_results")
+            dimension_analyzing = st.session_state.get("dimension_analyzing", False)
+            
             if cohort_table_info:
                 # Table already created, ready for dimension analysis
-                st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
-                # TODO: Add dimension analysis button here (next step)
+                if dimension_results:
+                    # Show dimension analysis results
+                    display_dimension_results(dimension_results)
+                elif dimension_analyzing:
+                    with st.spinner("Analyzing cohort dimensions... This may take a minute."):
+                        # This will be handled by the button click handler
+                        pass
+                else:
+                    st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
+                    if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
+                        st.session_state.dimension_analyzing = True
+                        st.rerun()
             elif st.session_state.get("cohort_table_creating"):
                 # Creating table in background - user doesn't need to know details
                 with st.spinner("Preparing dimension analysis..."):
@@ -1021,6 +1052,31 @@ def render_chat_page():
                 if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
                     st.session_state.cohort_table_creating = True
                     st.rerun()
+            
+            # Handle dimension analysis execution
+            if dimension_analyzing and cohort_table_info and not dimension_results:
+                try:
+                    cohort_table = cohort_table_info.get('cohort_table')
+                    has_medrec = cohort_table_info.get('has_medrec_key', False)
+                    
+                    if cohort_table and hasattr(st.session_state, 'dimension_service'):
+                        with st.spinner("Discovering schema and generating dimension queries in parallel..."):
+                            # Use dynamic mode: schema discovery + LLM-generated SQL (parallel)
+                            results = st.session_state.dimension_service.analyze_dimensions(
+                                cohort_table=cohort_table,
+                                has_medrec_key=has_medrec,
+                                use_dynamic=True  # Enable dynamic schema-based generation
+                            )
+                            st.session_state.dimension_results = results
+                            st.session_state.dimension_analyzing = False
+                            st.rerun()
+                    else:
+                        st.error("Cannot analyze dimensions: cohort table information missing")
+                        st.session_state.dimension_analyzing = False
+                except Exception as e:
+                    st.error(f"Error analyzing dimensions: {str(e)}")
+                    logger.error(f"Dimension analysis error: {str(e)}", exc_info=True)
+                    st.session_state.dimension_analyzing = False
 
 
 def process_query(query: str):
@@ -1160,8 +1216,267 @@ def process_query(query: str):
                 })
 
 
+def display_dimension_results(results: dict):
+    """
+    Display dimension analysis results with visualizations
+    
+    Args:
+        results: Dictionary with 'dimensions' (dict of dimension results) and 'errors' (dict of errors)
+    """
+    dimensions = results.get('dimensions', {})
+    errors = results.get('errors', {})
+    generated_queries = results.get('generated_queries', {})
+    validation_results = results.get('validation_results', {})
+    
+    # Show SQL validation summary
+    if validation_results:
+        valid_count = sum(1 for v in validation_results.values() if v.get('is_valid', False))
+        total_count = len(validation_results)
+        if valid_count == total_count:
+            st.success(f"✅ All {total_count} dimension SQL queries validated successfully")
+        else:
+            st.warning(f"⚠️ SQL Validation: {valid_count}/{total_count} queries passed validation")
+    
+    # Show generated SQL queries (collapsible)
+    if generated_queries:
+        with st.expander("🔍 View Generated SQL Queries", expanded=False):
+            for dim_name, sql in generated_queries.items():
+                validation = validation_results.get(dim_name, {})
+                is_valid = validation.get('is_valid', False)
+                
+                st.markdown(f"### {dim_name}")
+                if not is_valid:
+                    st.error("❌ Validation Failed")
+                    warnings = validation.get('warnings', [])
+                    for warning in warnings:
+                        st.warning(warning)
+                else:
+                    st.success("✅ Validated")
+                
+                st.code(sql, language='sql')
+                st.markdown("---")
+    
+    if errors:
+        st.warning(f"⚠️ Some dimensions failed to load: {', '.join(errors.keys())}")
+        with st.expander("View Errors", expanded=False):
+            for dim_name, error_msg in errors.items():
+                st.error(f"**{dim_name}**: {error_msg}")
+                # Show SQL if available
+                if dim_name in generated_queries:
+                    st.code(generated_queries[dim_name], language='sql')
+    
+    if not dimensions or all(not v for v in dimensions.values()):
+        st.info("No dimension data available")
+        return
+    
+    # Demographics Section
+    st.subheader("👥 Demographics")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Age Groups
+        if dimensions.get('age_groups'):
+            age_df = pd.DataFrame(dimensions['age_groups'])
+            if not age_df.empty:
+                fig = px.bar(
+                    age_df, 
+                    x='age_group', 
+                    y='patient_count',
+                    title='Age Distribution',
+                    labels={'patient_count': 'Patient Count', 'age_group': 'Age Group'},
+                    color='patient_count',
+                    color_continuous_scale='Blues'
+                )
+                fig.update_layout(height=300, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Age Data", expanded=False):
+                    st.dataframe(age_df, use_container_width=True, hide_index=True)
+        
+        # Gender
+        if dimensions.get('gender'):
+            gender_df = pd.DataFrame(dimensions['gender'])
+            if not gender_df.empty:
+                fig = go.Figure(data=[
+                    go.Pie(
+                        labels=gender_df['gender'],
+                        values=gender_df['patient_count'],
+                        hole=0.4,
+                        marker_colors=['rgba(59, 130, 246, 0.8)', 'rgba(236, 72, 153, 0.8)', 'rgba(156, 163, 175, 0.8)']
+                    )
+                ])
+                fig.update_layout(title='Gender Distribution', height=300)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Gender Data", expanded=False):
+                    st.dataframe(gender_df, use_container_width=True, hide_index=True)
+    
+    with col2:
+        # Race
+        if dimensions.get('race'):
+            race_df = pd.DataFrame(dimensions['race'])
+            if not race_df.empty:
+                fig = px.bar(
+                    race_df.head(10),  # Top 10 races
+                    x='race',
+                    y='patient_count',
+                    title='Race Distribution (Top 10)',
+                    labels={'patient_count': 'Patient Count', 'race': 'Race'},
+                    color='patient_count',
+                    color_continuous_scale='Greens'
+                )
+                fig.update_layout(height=300, showlegend=False, xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Race Data", expanded=False):
+                    st.dataframe(race_df, use_container_width=True, hide_index=True)
+        
+        # Ethnicity
+        if dimensions.get('ethnicity'):
+            ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
+            if not ethnicity_df.empty:
+                fig = go.Figure(data=[
+                    go.Pie(
+                        labels=ethnicity_df['ethnicity'],
+                        values=ethnicity_df['patient_count'],
+                        hole=0.4,
+                        marker_colors=['rgba(16, 185, 129, 0.8)', 'rgba(245, 158, 11, 0.8)', 'rgba(156, 163, 175, 0.8)']
+                    )
+                ])
+                fig.update_layout(title='Ethnicity Distribution', height=300)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Ethnicity Data", expanded=False):
+                    st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
+    
+    # Visit Characteristics Section
+    st.subheader("🏥 Visit Characteristics")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Visit Level
+        if dimensions.get('visit_level'):
+            visit_df = pd.DataFrame(dimensions['visit_level'])
+            if not visit_df.empty:
+                fig = px.bar(
+                    visit_df,
+                    x='visit_level',
+                    y='encounter_count',
+                    title='Visit Level Distribution',
+                    labels={'encounter_count': 'Encounter Count', 'visit_level': 'Visit Level'},
+                    color='encounter_count',
+                    color_continuous_scale='Purples'
+                )
+                fig.update_layout(height=250, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Visit Level Data", expanded=False):
+                    st.dataframe(visit_df, use_container_width=True, hide_index=True)
+    
+    with col2:
+        # Admit Source
+        if dimensions.get('admit_source'):
+            admit_source_df = pd.DataFrame(dimensions['admit_source'])
+            if not admit_source_df.empty:
+                fig = px.bar(
+                    admit_source_df.head(8),  # Top 8
+                    x='admit_source',
+                    y='encounter_count',
+                    title='Admit Source (Top 8)',
+                    labels={'encounter_count': 'Encounter Count', 'admit_source': 'Admit Source'},
+                    color='encounter_count',
+                    color_continuous_scale='Oranges'
+                )
+                fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Admit Source Data", expanded=False):
+                    st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
+    
+    with col3:
+        # Admit Type
+        if dimensions.get('admit_type'):
+            admit_type_df = pd.DataFrame(dimensions['admit_type'])
+            if not admit_type_df.empty:
+                fig = px.bar(
+                    admit_type_df,
+                    x='admit_type',
+                    y='encounter_count',
+                    title='Admit Type Distribution',
+                    labels={'encounter_count': 'Encounter Count', 'admit_type': 'Admit Type'},
+                    color='encounter_count',
+                    color_continuous_scale='Reds'
+                )
+                fig.update_layout(height=250, showlegend=False, xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Admit Type Data", expanded=False):
+                    st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
+    
+    # Site Characteristics Section
+    st.subheader("🏛️ Site Characteristics")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Urban/Rural
+        if dimensions.get('urban_rural'):
+            urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
+            if not urban_rural_df.empty:
+                fig = go.Figure(data=[
+                    go.Pie(
+                        labels=urban_rural_df['location_type'],
+                        values=urban_rural_df['patient_count'],
+                        hole=0.4
+                    )
+                ])
+                fig.update_layout(title='Urban vs Rural', height=250)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Urban/Rural Data", expanded=False):
+                    st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
+    
+    with col2:
+        # Teaching Status
+        if dimensions.get('teaching'):
+            teaching_df = pd.DataFrame(dimensions['teaching'])
+            if not teaching_df.empty:
+                fig = go.Figure(data=[
+                    go.Pie(
+                        labels=teaching_df['teaching_status'],
+                        values=teaching_df['patient_count'],
+                        hole=0.4,
+                        marker_colors=['rgba(59, 130, 246, 0.8)', 'rgba(156, 163, 175, 0.8)', 'rgba(239, 68, 68, 0.8)']
+                    )
+                ])
+                fig.update_layout(title='Teaching Status', height=250)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Teaching Status Data", expanded=False):
+                    st.dataframe(teaching_df, use_container_width=True, hide_index=True)
+    
+    with col3:
+        # Bed Count
+        if dimensions.get('bed_count'):
+            bed_count_df = pd.DataFrame(dimensions['bed_count'])
+            if not bed_count_df.empty:
+                fig = px.bar(
+                    bed_count_df,
+                    x='bed_count_group',
+                    y='patient_count',
+                    title='Bed Count Groups',
+                    labels={'patient_count': 'Patient Count', 'bed_count_group': 'Bed Count Group'},
+                    color='patient_count',
+                    color_continuous_scale='Teal'
+                )
+                fig.update_layout(height=250, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                with st.expander("View Bed Count Data", expanded=False):
+                    st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
+
+
 def display_demographics(data: dict):
-    """Display demographics data"""
+    """Display demographics data (legacy function - kept for compatibility)"""
     if data.get('age_gender'):
         st.write("**Age & Gender Distribution**")
         df = pd.DataFrame(data['age_gender'])
