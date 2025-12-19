@@ -80,8 +80,18 @@ class DimensionAnalysisService:
                 'has_medrec_key': True/False
             }
         """
-        cohort_id = f"cohort_{session_id}_{int(time.time())}"
-        cohort_table = f"{self.cohort_table_prefix}.{cohort_id}"
+        # Generate a simpler, readable table name
+        # Format: cohort_YYYYMMDD_HHMMSS (e.g., cohort_20241217_143022)
+        # This is more readable and reusable than UUID-based names
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cohort_id = f"cohort_{timestamp}"
+        
+        # Unity Catalog table names need backticks for safety (handles special chars like hyphens)
+        # Format: `catalog`.`schema`.`table_name`
+        catalog_schema = self.cohort_table_prefix.replace('.', '`.`')
+        cohort_table_quoted = f"`{catalog_schema}`.`{cohort_id}`"  # For SQL execution
+        cohort_table = f"{self.cohort_table_prefix}.{cohort_id}"  # For logging/display/return
         
         logger.info(f"Creating cohort table from Genie SQL: {cohort_table}")
         
@@ -92,10 +102,10 @@ class DimensionAnalysisService:
         has_medrec, has_patient = self.detect_cohort_structure(genie_sql)
         
         # Build CREATE TABLE AS SELECT - Databricks SQL syntax
-        # Format: CREATE OR REPLACE TABLE catalog.schema.table USING DELTA TBLPROPERTIES (...) AS SELECT ...
-        # Note: Unity Catalog uses three-part names: catalog.schema.table (no backticks needed)
+        # Format: CREATE OR REPLACE TABLE `catalog`.`schema`.`table` USING DELTA TBLPROPERTIES (...) AS SELECT ...
+        # Unity Catalog table names need backticks to handle special characters
         create_sql = (
-            f"CREATE OR REPLACE TABLE {cohort_table}\n"
+            f"CREATE OR REPLACE TABLE {cohort_table_quoted}\n"
             f"USING DELTA\n"
             f"TBLPROPERTIES (\n"
             f"  'delta.autoOptimize.optimizeWrite' = 'true',\n"
@@ -138,7 +148,7 @@ class DimensionAnalysisService:
                     raise
                 
                 # Get count
-                cursor.execute(f"SELECT COUNT(*) as cnt FROM {cohort_table}")
+                cursor.execute(f"SELECT COUNT(*) as cnt FROM {cohort_table_quoted}")
                 count = cursor.fetchone()[0]
                 
                 logger.info(f"Cohort table created: {cohort_table} with {count} rows")
@@ -146,8 +156,11 @@ class DimensionAnalysisService:
                 # Optionally add clustering after table creation (if supported)
                 # This can be done later if needed for optimization
         
+        # Return unquoted table name for easier use in subsequent queries
+        # Callers should add backticks when using in SQL: `catalog`.`schema`.`table`
         return {
-            'cohort_table': cohort_table,
+            'cohort_table': cohort_table,           # Return unquoted for display/logging
+            'cohort_table_quoted': cohort_table_quoted,  # Return quoted for SQL execution
             'cohort_id': cohort_id,
             'count': count,
             'has_medrec_key': has_medrec
@@ -165,7 +178,14 @@ class DimensionAnalysisService:
         Returns:
             Same as create_cohort_table
         """
-        cohort_id = f"cohort_{session_id}_{int(time.time())}"
+        # Use same simplified naming scheme as create_cohort_table_from_sql
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cohort_id = f"cohort_{timestamp}"
+        
+        # Unity Catalog table names need backticks for safety
+        catalog_schema = self.cohort_table_prefix.replace('.', '`.`')
+        cohort_table_quoted = f"`{catalog_schema}`.`{cohort_id}`"
         cohort_table = f"{self.cohort_table_prefix}.{cohort_id}"
         
         logger.info(f"Creating cohort table from DataFrame: {cohort_table}")
@@ -214,7 +234,7 @@ class DimensionAnalysisService:
         # Create table structure first
         if has_medrec:
             create_sql = f"""
-            CREATE OR REPLACE TABLE {cohort_table}
+            CREATE OR REPLACE TABLE {cohort_table_quoted}
             USING DELTA
             CLUSTER BY (medrec_key, patient_key)
             TBLPROPERTIES (
@@ -231,7 +251,7 @@ class DimensionAnalysisService:
             """
         else:
             create_sql = f"""
-            CREATE OR REPLACE TABLE {cohort_table}
+            CREATE OR REPLACE TABLE {cohort_table_quoted}
             USING DELTA
             CLUSTER BY (patient_key)
             TBLPROPERTIES (
@@ -289,7 +309,7 @@ class DimensionAnalysisService:
                 logger.info(f"Completed inserting {total_rows} rows")
                 
                 # Get count
-                cursor.execute(f"SELECT COUNT(*) as cnt FROM {cohort_table}")
+                cursor.execute(f"SELECT COUNT(*) as cnt FROM {cohort_table_quoted}")
                 count = cursor.fetchone()[0]
                 
                 logger.info(f"Cohort table created: {cohort_table} with {count} rows")
