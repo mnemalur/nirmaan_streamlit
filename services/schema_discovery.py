@@ -150,7 +150,12 @@ class SchemaDiscoveryService:
     
     def get_dimension_table_mapping(self, catalog: str, schema: str) -> Dict[str, List[str]]:
         """
-        Map dimensions to recommended tables
+        Map dimensions to recommended tables (simplified - uses patdemo and provider tables)
+        
+        Simple mapping:
+        - Patient-level dimensions (age, gender, race, ethnicity) → patdemo
+        - Visit-level dimensions (visit_level, admit_source, admit_type) → patdemo  
+        - Site-level dimensions (urban_rural, teaching, bed_count) → provider
         
         Args:
             catalog: Catalog name
@@ -159,58 +164,240 @@ class SchemaDiscoveryService:
         Returns:
             Dictionary mapping dimension names to list of recommended table names
         """
+        # Discover available tables
         tables = self.discover_tables(catalog, schema)
+        table_names = [t['TABLE_NAME'].lower() for t in tables]
         
+        # Find phd_de_patdemo table (case-insensitive)
+        patdemo_table = None
+        provider_table = None
+        
+        for table_info in tables:
+            table_name_lower = table_info['TABLE_NAME'].lower()
+            if 'phd_de_patdemo' in table_name_lower or table_name_lower == 'phd_de_patdemo':
+                patdemo_table = table_info['TABLE_NAME']
+            if 'provider' in table_name_lower or table_name_lower == 'provider':
+                provider_table = table_info['TABLE_NAME']
+        
+        # If not found, try exact match
+        if not patdemo_table:
+            # Check exact match first
+            for table_info in tables:
+                if table_info['TABLE_NAME'].lower() == 'phd_de_patdemo':
+                    patdemo_table = table_info['TABLE_NAME']
+                    break
+            # If still not found, use first table with 'patdemo' or 'demo'
+            if not patdemo_table:
+                for table_info in tables:
+                    table_name_lower = table_info['TABLE_NAME'].lower()
+                    if 'patdemo' in table_name_lower or 'demo' in table_name_lower:
+                        patdemo_table = table_info['TABLE_NAME']
+                        break
+        
+        if not provider_table:
+            # Check exact match first
+            for table_info in tables:
+                if table_info['TABLE_NAME'].lower() == 'provider':
+                    provider_table = table_info['TABLE_NAME']
+                    break
+            # If still not found, use first table with 'provider' or 'site'
+            if not provider_table:
+                for table_info in tables:
+                    table_name_lower = table_info['TABLE_NAME'].lower()
+                    if 'provider' in table_name_lower or 'site' in table_name_lower:
+                        provider_table = table_info['TABLE_NAME']
+                        break
+        
+        # Default mappings (simplified)
         dimension_to_tables = {
-            'age_groups': [],
-            'gender': [],
-            'race': [],
-            'ethnicity': [],
-            'visit_level': [],
-            'admit_source': [],
-            'admit_type': [],
-            'urban_rural': [],
-            'teaching': [],
-            'bed_count': [],
+            # Patient-level dimensions → patdemo
+            'age_groups': [patdemo_table] if patdemo_table else [],
+            'gender': [patdemo_table] if patdemo_table else [],
+            'race': [patdemo_table] if patdemo_table else [],
+            'ethnicity': [patdemo_table] if patdemo_table else [],
+            
+            # Visit-level dimensions → patdemo (visit info is often in patient demo table)
+            'visit_level': [patdemo_table] if patdemo_table else [],
+            'admit_source': [patdemo_table] if patdemo_table else [],
+            'admit_type': [patdemo_table] if patdemo_table else [],
+            
+            # Site-level dimensions → provider
+            'urban_rural': [provider_table] if provider_table else [],
+            'teaching': [provider_table] if provider_table else [],
+            'bed_count': [provider_table] if provider_table else [],
+            
+            # Other dimensions (for future use)
             'procedures': [],
             'diagnoses': [],
             'labs': [],
             'medications': []
         }
         
-        for table_info in tables:
-            table_name = table_info['TABLE_NAME']
-            columns = self.discover_columns(catalog, schema, table_name)
-            purposes = self.identify_table_purpose(table_name, columns)
-            
-            # Map purposes to dimensions
-            if 'demographics' in purposes:
-                dimension_to_tables['age_groups'].append(table_name)
-                dimension_to_tables['gender'].append(table_name)
-                dimension_to_tables['race'].append(table_name)
-                dimension_to_tables['ethnicity'].append(table_name)
-                dimension_to_tables['urban_rural'].append(table_name)
-                dimension_to_tables['teaching'].append(table_name)
-                dimension_to_tables['bed_count'].append(table_name)
-            
-            if 'encounters' in purposes:
-                dimension_to_tables['visit_level'].append(table_name)
-                dimension_to_tables['admit_source'].append(table_name)
-                dimension_to_tables['admit_type'].append(table_name)
-            
-            if 'procedures' in purposes:
-                dimension_to_tables['procedures'].append(table_name)
-            
-            if 'diagnoses' in purposes:
-                dimension_to_tables['diagnoses'].append(table_name)
-            
-            if 'labs' in purposes:
-                dimension_to_tables['labs'].append(table_name)
-            
-            if 'medications' in purposes:
-                dimension_to_tables['medications'].append(table_name)
+        logger.info(f"Dimension table mapping - patdemo: {patdemo_table}, provider: {provider_table}")
         
         return dimension_to_tables
+    
+    def get_exact_column_names_for_dimension(
+        self, 
+        catalog: str, 
+        schema: str, 
+        dimension_name: str
+    ) -> Dict[str, str]:
+        """
+        Get exact column names from actual tables for a specific dimension.
+        This ensures we use the real column names (e.g., BED_GRP instead of BED_COUNT).
+        
+        Args:
+            catalog: Catalog name
+            schema: Schema name
+            dimension_name: Dimension name (e.g., 'age_groups', 'bed_count')
+            
+        Returns:
+            Dictionary mapping logical names to actual column names:
+            {
+                'source_column': 'actual_column_name',  # e.g., 'bed_count': 'BED_GRP'
+                'join_key': 'actual_join_column',  # e.g., 'prov_id': 'PROV_ID'
+            }
+        """
+        dimension_table_mapping = self.get_dimension_table_mapping(catalog, schema)
+        recommended_tables = dimension_table_mapping.get(dimension_name, [])
+        
+        if not recommended_tables:
+            logger.warning(f"No table mapping found for dimension: {dimension_name}")
+            return {}
+        
+        # Get columns from the recommended table(s)
+        # For site dimensions, we also need phd_de_patdemo for the bridge join
+        table_columns = {}
+        for table_name in recommended_tables:
+            if table_name:
+                columns = self.discover_columns(catalog, schema, table_name)
+                table_columns[table_name] = {col['COLUMN_NAME']: col for col in columns}
+        
+        # For site dimensions, also get phd_de_patdemo columns (needed for bridge join)
+        if dimension_name in ['urban_rural', 'teaching', 'bed_count']:
+            # Find phd_de_patdemo table
+            tables = self.discover_tables(catalog, schema)
+            patdemo_table = None
+            for table_info in tables:
+                table_name_lower = table_info['TABLE_NAME'].lower()
+                if 'phd_de_patdemo' in table_name_lower or table_name_lower == 'phd_de_patdemo':
+                    patdemo_table = table_info['TABLE_NAME']
+                    break
+            
+            if patdemo_table and patdemo_table not in table_columns:
+                columns = self.discover_columns(catalog, schema, patdemo_table)
+                table_columns[patdemo_table] = {col['COLUMN_NAME']: col for col in columns}
+        
+        result = {}
+        
+        # Helper to find table by name (case-insensitive)
+        def find_table(table_name_pattern):
+            for table_name in table_columns.keys():
+                if table_name_pattern.lower() in table_name.lower():
+                    return table_columns[table_name]
+            return None
+        
+        # Map dimension to expected columns and find actual matches
+        if dimension_name == 'age_groups':
+            # Look for age column in phd_de_patdemo
+            cols = find_table('phd_de_patdemo')
+            if cols:
+                # Find age column (case-insensitive)
+                for col_name in cols.keys():
+                    if 'age' in col_name.lower():
+                        result['age_column'] = col_name
+                        break
+        
+        elif dimension_name == 'gender':
+            cols = find_table('phd_de_patdemo')
+            if cols:
+                for col_name in cols.keys():
+                    if 'gender' in col_name.lower() or 'sex' in col_name.lower():
+                        result['gender_column'] = col_name
+                        break
+        
+        elif dimension_name == 'race':
+            cols = find_table('phd_de_patdemo')
+            if cols:
+                for col_name in cols.keys():
+                    if 'race' in col_name.lower():
+                        result['race_column'] = col_name
+                        break
+        
+        elif dimension_name == 'ethnicity':
+            cols = find_table('phd_de_patdemo')
+            if cols:
+                for col_name in cols.keys():
+                    if 'ethnic' in col_name.lower():
+                        result['ethnicity_column'] = col_name
+                        break
+        
+        elif dimension_name in ['visit_level', 'admit_source', 'admit_type']:
+            cols = find_table('phd_de_patdemo')
+            if cols:
+                if dimension_name == 'visit_level':
+                    for col_name in cols.keys():
+                        if 'visit' in col_name.lower() and ('level' in col_name.lower() or 'type' in col_name.lower()):
+                            result['visit_level_column'] = col_name
+                            break
+                elif dimension_name == 'admit_source':
+                    for col_name in cols.keys():
+                        if 'admit' in col_name.lower() and 'source' in col_name.lower():
+                            result['admit_source_column'] = col_name
+                            break
+                elif dimension_name == 'admit_type':
+                    for col_name in cols.keys():
+                        if 'admit' in col_name.lower() and 'type' in col_name.lower():
+                            result['admit_type_column'] = col_name
+                            break
+        
+        elif dimension_name == 'urban_rural':
+            # Need provider table columns
+            provider_cols = find_table('provider')
+            if provider_cols:
+                for col_name in provider_cols.keys():
+                    if 'location' in col_name.lower() or 'urban' in col_name.lower() or 'rural' in col_name.lower():
+                        result['location_type_column'] = col_name
+                        break
+            # Also need prov_id from phd_de_patdemo for bridge join
+            patdemo_cols = find_table('phd_de_patdemo')
+            if patdemo_cols:
+                for col_name in patdemo_cols.keys():
+                    if 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                        result['prov_id_column'] = col_name
+                        break
+        
+        elif dimension_name == 'teaching':
+            provider_cols = find_table('provider')
+            if provider_cols:
+                for col_name in provider_cols.keys():
+                    if 'teach' in col_name.lower() or 'train' in col_name.lower():
+                        result['teaching_flag_column'] = col_name
+                        break
+            patdemo_cols = find_table('phd_de_patdemo')
+            if patdemo_cols:
+                for col_name in patdemo_cols.keys():
+                    if 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                        result['prov_id_column'] = col_name
+                        break
+        
+        elif dimension_name == 'bed_count':
+            provider_cols = find_table('provider')
+            if provider_cols:
+                for col_name in provider_cols.keys():
+                    if 'bed' in col_name.lower() or 'beds' in col_name.lower():
+                        result['bed_count_column'] = col_name
+                        break
+            patdemo_cols = find_table('phd_de_patdemo')
+            if patdemo_cols:
+                for col_name in patdemo_cols.keys():
+                    if 'prov' in col_name.lower() and ('id' in col_name.lower() or 'key' in col_name.lower()):
+                        result['prov_id_column'] = col_name
+                        break
+        
+        logger.info(f"Exact columns for {dimension_name}: {result}")
+        return result
     
     def get_schema_summary(self, catalog: str, schema: str) -> Dict:
         """

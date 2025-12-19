@@ -40,20 +40,20 @@ class DimensionAnalysisService:
         
     def detect_cohort_structure(self, genie_sql: str) -> Tuple[bool, bool]:
         """
-        Detect if Genie SQL returns medrec_key and/or patient_key by analyzing the SQL
+        Detect if Genie SQL returns medrec_key and/or pat_key by analyzing the SQL
         
         Args:
             genie_sql: SQL query from Genie
         
         Returns:
-            Tuple of (has_medrec_key, has_patient_key)
+            Tuple of (has_medrec_key, has_pat_key)
         """
         sql_lower = genie_sql.lower()
         has_medrec = 'medrec' in sql_lower or 'med_rec' in sql_lower
-        has_patient = 'patient' in sql_lower and ('key' in sql_lower or 'id' in sql_lower)
+        has_pat = 'pat_key' in sql_lower or ('pat' in sql_lower and 'key' in sql_lower)
         
-        logger.info(f"Detected cohort structure from SQL - has_medrec: {has_medrec}, has_patient: {has_patient}")
-        return has_medrec, has_patient
+        logger.info(f"Detected cohort structure from SQL - has_medrec: {has_medrec}, has_pat_key: {has_pat}")
+        return has_medrec, has_pat
     
     def create_cohort_table_from_sql(self, session_id: str, genie_sql: str) -> Dict:
         """
@@ -77,7 +77,8 @@ class DimensionAnalysisService:
                 'cohort_table': 'pasrt_uat.pas_temp_cohort.cohort_xyz',
                 'cohort_id': 'cohort_xyz',
                 'count': 1234,
-                'has_medrec_key': True/False
+                'has_medrec_key': True/False,
+            'has_pat_key': True/False
             }
         """
         # Generate a simpler, readable table name
@@ -173,7 +174,7 @@ class DimensionAnalysisService:
         
         Args:
             session_id: User session ID
-            df: DataFrame with medrec_key and/or patient_key columns
+            df: DataFrame with medrec_key and/or pat_key columns
         
         Returns:
             Same as create_cohort_table
@@ -192,51 +193,53 @@ class DimensionAnalysisService:
         
         # Check if DataFrame already has the correct column names (from create_cohort_table)
         # or if we need to find them (from direct DataFrame input)
-        if 'medrec_key' in df.columns and 'patient_key' in df.columns:
+        if 'medrec_key' in df.columns and 'pat_key' in df.columns:
             # Already has correct column names
-            cohort_df = df[['medrec_key', 'patient_key']].copy()
+            cohort_df = df[['medrec_key', 'pat_key']].copy()
             has_medrec = True
-        elif 'patient_key' in df.columns:
-            # Only patient_key
-            cohort_df = df[['patient_key']].copy()
+        elif 'pat_key' in df.columns:
+            # Only pat_key
+            cohort_df = df[['pat_key']].copy()
             has_medrec = False
         else:
             # Need to find columns
             medrec_col = None
-            patient_col = None
+            pat_col = None
             
             for col in df.columns:
                 col_lower = str(col).lower()
                 if 'medrec' in col_lower or 'med_rec' in col_lower:
                     medrec_col = col
-                if 'patient' in col_lower and ('key' in col_lower or 'id' in col_lower):
-                    patient_col = col
+                if 'pat_key' in col_lower or (col_lower == 'pat' and 'key' in df.columns):
+                    pat_col = col
+                elif 'pat' in col_lower and 'key' in col_lower:
+                    pat_col = col
             
-            if not patient_col:
-                raise ValueError(f"Could not find patient_key column in DataFrame. Columns: {list(df.columns)}")
+            if not pat_col:
+                raise ValueError(f"Could not find pat_key column in DataFrame. Columns: {list(df.columns)}")
             
             has_medrec = medrec_col is not None
             
             # Prepare DataFrame with only the keys we need
             if has_medrec:
-                cohort_df = df[[medrec_col, patient_col]].copy()
-                cohort_df.columns = ['medrec_key', 'patient_key']
+                cohort_df = df[[medrec_col, pat_col]].copy()
+                cohort_df.columns = ['medrec_key', 'pat_key']
             else:
-                cohort_df = df[[patient_col]].copy()
-                cohort_df.columns = ['patient_key']
+                cohort_df = df[[pat_col]].copy()
+                cohort_df.columns = ['pat_key']
         
         # Clean and prepare data
-        cohort_df = cohort_df.dropna(subset=['patient_key'])  # Remove rows without patient_key
+        cohort_df = cohort_df.dropna(subset=['pat_key'])  # Remove rows without pat_key
         if has_medrec:
             cohort_df['medrec_key'] = cohort_df['medrec_key'].astype('Int64')  # Nullable integer
-        cohort_df['patient_key'] = cohort_df['patient_key'].astype('Int64')
+        cohort_df['pat_key'] = cohort_df['pat_key'].astype('Int64')
         
         # Create table structure first
         if has_medrec:
             create_sql = f"""
             CREATE OR REPLACE TABLE {cohort_table_quoted}
             USING DELTA
-            CLUSTER BY (medrec_key, patient_key)
+            CLUSTER BY (medrec_key, pat_key)
             TBLPROPERTIES (
                 'delta.autoOptimize.optimizeWrite' = 'true',
                 'delta.autoOptimize.autoCompact' = 'true',
@@ -245,7 +248,7 @@ class DimensionAnalysisService:
             AS
             SELECT 
                 CAST(medrec_key AS BIGINT) AS medrec_key,
-                CAST(patient_key AS BIGINT) AS patient_key
+                CAST(pat_key AS BIGINT) AS pat_key
             FROM VALUES (CAST(NULL AS BIGINT), CAST(NULL AS BIGINT))
             WHERE 1=0
             """
@@ -253,7 +256,7 @@ class DimensionAnalysisService:
             create_sql = f"""
             CREATE OR REPLACE TABLE {cohort_table_quoted}
             USING DELTA
-            CLUSTER BY (patient_key)
+            CLUSTER BY (pat_key)
             TBLPROPERTIES (
                 'delta.autoOptimize.optimizeWrite' = 'true',
                 'delta.autoOptimize.autoCompact' = 'true',
@@ -261,7 +264,7 @@ class DimensionAnalysisService:
             )
             AS
             SELECT 
-                CAST(patient_key AS BIGINT) AS patient_key
+                CAST(pat_key AS BIGINT) AS pat_key
             FROM VALUES (CAST(NULL AS BIGINT))
             WHERE 1=0
             """
@@ -283,24 +286,24 @@ class DimensionAnalysisService:
                 total_rows = len(cohort_df)
                 
                 if has_medrec:
-                    insert_sql = f"INSERT INTO {cohort_table} (medrec_key, patient_key) VALUES (?, ?)"
+                    insert_sql = f"INSERT INTO {cohort_table} (medrec_key, pat_key) VALUES (?, ?)"
                     # Process in batches
                     for i in range(0, total_rows, batch_size):
                         batch_df = cohort_df.iloc[i:i+batch_size]
                         values = [
                             (int(row['medrec_key']) if pd.notna(row['medrec_key']) else None, 
-                             int(row['patient_key'])) 
+                             int(row['pat_key'])) 
                             for _, row in batch_df.iterrows()
                         ]
                         cursor.executemany(insert_sql, values)
                         if (i + batch_size) % 50000 == 0:
                             logger.info(f"Inserted {min(i + batch_size, total_rows)}/{total_rows} rows")
                 else:
-                    insert_sql = f"INSERT INTO {cohort_table} (patient_key) VALUES (?)"
+                    insert_sql = f"INSERT INTO {cohort_table} (pat_key) VALUES (?)"
                     # Process in batches
                     for i in range(0, total_rows, batch_size):
                         batch_df = cohort_df.iloc[i:i+batch_size]
-                        values = [(int(row['patient_key']),) for _, row in batch_df.iterrows()]
+                        values = [(int(row['pat_key']),) for _, row in batch_df.iterrows()]
                         cursor.executemany(insert_sql, values)
                         if (i + batch_size) % 50000 == 0:
                             logger.info(f"Inserted {min(i + batch_size, total_rows)}/{total_rows} rows")
@@ -374,8 +377,15 @@ class DimensionAnalysisService:
         # If dynamic mode requested, delegate to dynamic service
         if use_dynamic:
             try:
-                from services.dynamic_dimension_analysis import DynamicDimensionAnalysisService
-                dynamic_service = DynamicDimensionAnalysisService()
+                # Try to use pre-initialized service from session state (if available)
+                # This reuses the cached schema discovery
+                dynamic_service = None
+                if hasattr(self, '_cached_dynamic_service'):
+                    dynamic_service = self._cached_dynamic_service
+                else:
+                    from services.dynamic_dimension_analysis import DynamicDimensionAnalysisService
+                    dynamic_service = DynamicDimensionAnalysisService()
+                
                 return dynamic_service.analyze_dimensions_dynamically(
                     cohort_table=cohort_table,
                     has_medrec_key=has_medrec_key
@@ -391,14 +401,14 @@ class DimensionAnalysisService:
         else:
             cohort_table_quoted = cohort_table
         
-        # Determine join key - cohort table uses medrec_key or patient_key
-        # patdemo table uses patient_key (or medrec_key if that's what cohort has)
+        # Determine join key - cohort table uses medrec_key or pat_key
+        # phd_de_patdemo table uses pat_key (or medrec_key if that's what cohort has)
         if has_medrec_key:
             cohort_join_key = "medrec_key"
-            patdemo_join_key = "medrec_key"  # patdemo may have medrec_key
+            patdemo_join_key = "medrec_key"  # phd_de_patdemo may have medrec_key
         else:
-            cohort_join_key = "patient_key"
-            patdemo_join_key = "patient_key"  # patdemo uses patient_key
+            cohort_join_key = "pat_key"
+            patdemo_join_key = "pat_key"  # phd_de_patdemo uses pat_key
         
         # Build all dimension queries
         queries = {}
@@ -417,7 +427,7 @@ class DimensionAnalysisService:
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.patdemo d 
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             WHERE d.age IS NOT NULL
             GROUP BY age_group
@@ -443,7 +453,7 @@ class DimensionAnalysisService:
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.patdemo d 
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             GROUP BY gender
             ORDER BY patient_count DESC
@@ -456,7 +466,7 @@ class DimensionAnalysisService:
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.patdemo d 
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             GROUP BY race
             ORDER BY patient_count DESC
@@ -469,7 +479,7 @@ class DimensionAnalysisService:
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.patdemo d 
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
             GROUP BY ethnicity
             ORDER BY patient_count DESC
@@ -520,56 +530,62 @@ class DimensionAnalysisService:
             ORDER BY encounter_count DESC
         """
         
-        # 8. Urban/Rural
+        # 8. Urban/Rural (use phd_de_patdemo as bridge to provider table)
         queries['urban_rural'] = f"""
             SELECT 
                 CASE 
-                    WHEN d.location_type IN ('Urban', 'URBAN') THEN 'Urban'
-                    WHEN d.location_type IN ('Rural', 'RURAL') THEN 'Rural'
-                    ELSE COALESCE(d.location_type, 'Unknown')
+                    WHEN p.location_type IN ('Urban', 'URBAN') THEN 'Urban'
+                    WHEN p.location_type IN ('Rural', 'RURAL') THEN 'Rural'
+                    ELSE COALESCE(p.location_type, 'Unknown')
                 END as location_type,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.patdemo d 
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
+            JOIN {config.patient_table_prefix}.provider p
+                ON COALESCE(d.prov_id, d.provider_key) = COALESCE(p.prov_id, p.provider_key)
             GROUP BY location_type
             ORDER BY patient_count DESC
         """
         
-        # 9. Teaching Status
+        # 9. Teaching Status (use phd_de_patdemo as bridge to provider table)
         queries['teaching'] = f"""
             SELECT 
                 CASE 
-                    WHEN d.teaching_flag = 1 OR d.teaching_flag = 'Y' OR UPPER(d.teaching_flag) = 'YES' THEN 'Teaching'
-                    WHEN d.teaching_flag = 0 OR d.teaching_flag = 'N' OR UPPER(d.teaching_flag) = 'NO' THEN 'Non-Teaching'
+                    WHEN p.teaching_flag = 1 OR p.teaching_flag = 'Y' OR UPPER(p.teaching_flag) = 'YES' THEN 'Teaching'
+                    WHEN p.teaching_flag = 0 OR p.teaching_flag = 'N' OR UPPER(p.teaching_flag) = 'NO' THEN 'Non-Teaching'
                     ELSE 'Unknown'
                 END as teaching_status,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.patdemo d 
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
+            JOIN {config.patient_table_prefix}.provider p
+                ON COALESCE(d.prov_id, d.provider_key) = COALESCE(p.prov_id, p.provider_key)
             GROUP BY teaching_status
             ORDER BY patient_count DESC
         """
         
-        # 10. Bed Count Groups
+        # 10. Bed Count Groups (use phd_de_patdemo as bridge to provider table)
         queries['bed_count'] = f"""
             SELECT 
                 CASE 
-                    WHEN d.bed_count < 100 THEN '<100'
-                    WHEN d.bed_count BETWEEN 100 AND 299 THEN '100-299'
-                    WHEN d.bed_count BETWEEN 300 AND 499 THEN '300-499'
-                    WHEN d.bed_count >= 500 THEN '500+'
+                    WHEN p.bed_count < 100 THEN '<100'
+                    WHEN p.bed_count BETWEEN 100 AND 299 THEN '100-299'
+                    WHEN p.bed_count BETWEEN 300 AND 499 THEN '300-499'
+                    WHEN p.bed_count >= 500 THEN '500+'
                     ELSE 'Unknown'
                 END as bed_count_group,
                 COUNT(DISTINCT c.{cohort_join_key}) as patient_count,
                 ROUND(COUNT(DISTINCT c.{cohort_join_key}) * 100.0 / SUM(COUNT(DISTINCT c.{cohort_join_key})) OVER(), 2) as percentage
             FROM {cohort_table_quoted} c
-            JOIN {config.patient_table_prefix}.patdemo d 
+            JOIN {config.patient_table_prefix}.phd_de_patdemo d 
                 ON c.{cohort_join_key} = d.{patdemo_join_key}
-            WHERE d.bed_count IS NOT NULL
+            JOIN {config.patient_table_prefix}.provider p
+                ON COALESCE(d.prov_id, d.provider_key) = COALESCE(p.prov_id, p.provider_key)
+            WHERE p.bed_count IS NOT NULL
             GROUP BY bed_count_group
             ORDER BY 
                 CASE bed_count_group

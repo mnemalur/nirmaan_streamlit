@@ -150,16 +150,51 @@ def initialize_services():
         st.session_state.intent_service = IntentService()
         st.session_state.dimension_service = DimensionAnalysisService()
         
-        # Pre-discover schema for faster dimension analysis (cache it)
+        # Pre-discover schema and exact column mappings for faster dimension analysis (cache it)
         try:
             from services.schema_discovery import SchemaDiscoveryService
+            from services.dynamic_dimension_analysis import DynamicDimensionAnalysisService
+            
             schema_service = SchemaDiscoveryService()
-            # Cache schema context upfront (non-blocking, happens in background)
+            dynamic_service = DynamicDimensionAnalysisService()
+            
+            # Cache general schema context upfront
             schema_context = schema_service.get_schema_context_for_llm(
                 config.patient_catalog,
                 config.patient_schema
             )
             logger.info(f"Schema context cached ({len(schema_context)} chars)")
+            
+            # Pre-discover and cache exact column names for ALL dimensions
+            # This ensures the system is "hot" and ready to use immediately
+            dimension_names = [
+                'age_groups', 'gender', 'race', 'ethnicity',
+                'visit_level', 'admit_source', 'admit_type',
+                'urban_rural', 'teaching', 'bed_count'
+            ]
+            
+            logger.info(f"Pre-discovering exact column mappings for {len(dimension_names)} dimensions...")
+            for dim_name in dimension_names:
+                try:
+                    exact_columns = schema_service.get_exact_column_names_for_dimension(
+                        config.patient_catalog,
+                        config.patient_schema,
+                        dim_name
+                    )
+                    # Cache in dynamic service
+                    cache_key = f"{config.patient_catalog}.{config.patient_schema}.{dim_name}"
+                    dynamic_service._exact_column_cache[cache_key] = exact_columns
+                    logger.info(f"  ✓ {dim_name}: {exact_columns}")
+                except Exception as dim_error:
+                    logger.warning(f"  ✗ {dim_name}: {str(dim_error)}")
+            
+            # Store dynamic service in session state and dimension service for reuse
+            st.session_state.dynamic_dimension_service = dynamic_service
+            # Also store in dimension service so it can reuse the cached service
+            if hasattr(st.session_state, 'dimension_service'):
+                st.session_state.dimension_service._cached_dynamic_service = dynamic_service
+            logger.info(f"✅ Schema discovery complete - system is hot and ready!")
+            
         except Exception as e:
             logger.warning(f"Could not pre-discover schema: {str(e)}")
             # Non-critical, dimension analysis will discover schema on-demand
@@ -1237,8 +1272,19 @@ def display_dimension_results(results: dict):
         else:
             st.warning(f"⚠️ SQL Validation: {valid_count}/{total_count} queries passed validation")
     
-    # Show generated SQL queries (collapsible)
+    # Show errors first (outside any expander to avoid nesting)
+    if errors:
+        st.warning(f"⚠️ Some dimensions failed to load: {', '.join(errors.keys())}")
+        # Show errors inline, not in expander to avoid nesting issues
+        for dim_name, error_msg in errors.items():
+            st.error(f"**{dim_name}**: {error_msg}")
+            # Show SQL if available (inline, not in expander)
+            if dim_name in generated_queries:
+                st.code(generated_queries[dim_name], language='sql')
+    
+    # Show generated SQL queries (separate expander, not nested)
     if generated_queries:
+        st.markdown("---")
         with st.expander("🔍 View Generated SQL Queries", expanded=False):
             for dim_name, sql in generated_queries.items():
                 validation = validation_results.get(dim_name, {})
@@ -1255,15 +1301,6 @@ def display_dimension_results(results: dict):
                 
                 st.code(sql, language='sql')
                 st.markdown("---")
-    
-    if errors:
-        st.warning(f"⚠️ Some dimensions failed to load: {', '.join(errors.keys())}")
-        with st.expander("View Errors", expanded=False):
-            for dim_name, error_msg in errors.items():
-                st.error(f"**{dim_name}**: {error_msg}")
-                # Show SQL if available
-                if dim_name in generated_queries:
-                    st.code(generated_queries[dim_name], language='sql')
     
     if not dimensions or all(not v for v in dimensions.values()):
         st.info("No dimension data available")
