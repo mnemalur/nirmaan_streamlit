@@ -28,7 +28,15 @@ class DimensionAnalysisService:
         
         self.server_hostname = config.host.replace("https://", "").replace("http://", "")
         self.http_path = f"/sql/1.0/warehouses/{config.warehouse_id}"
-        self.cohort_table_prefix = config.cohort_table_prefix  # pasrt_uat.pas_temp_cohort
+        
+        # Get cohort table prefix (with fallback if config not set)
+        try:
+            self.cohort_table_prefix = config.cohort_table_prefix  # pasrt_uat.pas_temp_cohort
+        except AttributeError:
+            # Fallback if property doesn't exist
+            cohort_catalog = getattr(config, 'cohort_catalog', 'pasrt_uat')
+            cohort_schema = getattr(config, 'cohort_schema', 'pas_temp_cohort')
+            self.cohort_table_prefix = f"{cohort_catalog}.{cohort_schema}"
         
     def detect_cohort_structure(self, genie_sql: str) -> Tuple[bool, bool]:
         """
@@ -128,56 +136,6 @@ class DimensionAnalysisService:
             'cohort_id': cohort_id,
             'count': count,
             'has_medrec_key': has_medrec
-        }
-            
-        else:
-            # Create table with only patient_key
-            create_sql = f"""
-            CREATE OR REPLACE TABLE {cohort_table}
-            USING DELTA
-            CLUSTER BY (patient_key)
-            TBLPROPERTIES (
-                'delta.autoOptimize.optimizeWrite' = 'true',
-                'delta.autoOptimize.autoCompact' = 'true',
-                'delta.deletedFileRetentionDuration' = 'interval 1 days'
-            )
-            AS
-            SELECT 
-                CAST(patient_key AS BIGINT) AS patient_key
-            FROM VALUES
-            """
-            
-            # Build VALUES clause
-            values = []
-            for key_dict in cohort_keys:
-                patient = key_dict.get('patient_key')
-                if patient is not None:
-                    patient_val = f"CAST({patient} AS BIGINT)"
-                    values.append(f"({patient_val})")
-            
-            create_sql += ",\n".join(values)
-        
-        # Execute table creation
-        with connect(
-            server_hostname=self.server_hostname,
-            http_path=self.http_path,
-            access_token=config.token,
-        ) as conn:
-            with conn.cursor() as cursor:
-                logger.info(f"Executing CREATE TABLE for {cohort_table}")
-                cursor.execute(create_sql)
-                
-                # Get count
-                cursor.execute(f"SELECT COUNT(*) as cnt FROM {cohort_table}")
-                count = cursor.fetchone()[0]
-                
-                logger.info(f"Cohort table created: {cohort_table} with {count} rows")
-        
-        return {
-            'cohort_table': cohort_table,
-            'cohort_id': cohort_id,
-            'count': count,
-            'has_medrec_key': has_medrec_key
         }
     
     def create_cohort_table_from_dataframe(self, session_id: str, df: pd.DataFrame) -> Dict:
