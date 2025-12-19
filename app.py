@@ -836,26 +836,53 @@ def render_chat_page():
                         logger.info(f"🔍 DEBUG: first_row type: {type(first_row)}, is_list_of_dicts: {is_list_of_dicts}, is_list_of_lists: {is_list_of_lists}")
                         
                         if columns and len(columns) > 0:
-                            logger.info(f"✅ Using extracted columns: {columns}")
+                            logger.info(f"✅ Using extracted columns: {columns} (count: {len(columns)})")
+                            logger.info(f"🔍 DEBUG: Data sample - first row length: {len(first_row) if hasattr(first_row, '__len__') else 'N/A'}, first row: {str(first_row)[:100]}")
+                            
                             # Use provided column names
                             if is_list_of_lists:
                                 # Data is list of lists, use columns parameter
-                                df = pd.DataFrame(data, columns=columns)
+                                logger.info(f"🔍 DEBUG: Creating DataFrame from list of lists with {len(columns)} column names")
+                                logger.info(f"🔍 DEBUG: First row has {len(first_row)} values, columns list has {len(columns)} names")
+                                if len(first_row) != len(columns):
+                                    logger.warning(f"⚠️ MISMATCH: First row has {len(first_row)} values but we have {len(columns)} column names!")
+                                try:
+                                    df = pd.DataFrame(data, columns=columns)
+                                    logger.info(f"✅ DataFrame created successfully with columns parameter")
+                                except Exception as e:
+                                    logger.error(f"❌ Error creating DataFrame with columns: {e}")
+                                    # Fallback: create without columns
+                                    df = pd.DataFrame(data)
+                                    logger.warning(f"⚠️ Fallback: Created DataFrame without column names")
                             elif is_list_of_dicts:
                                 # Data is list of dicts, but we have column names - use them to reorder/select
+                                logger.info(f"🔍 DEBUG: Creating DataFrame from list of dicts")
                                 df = pd.DataFrame(data)
+                                logger.info(f"🔍 DEBUG: DataFrame from dicts has columns: {list(df.columns)}")
                                 # If column names match dict keys, reorder; otherwise use provided columns
                                 if set(columns).issubset(set(df.columns)):
+                                    logger.info(f"✅ Column names match dict keys, reordering...")
                                     df = df[columns]
                                 else:
+                                    logger.warning(f"⚠️ Column names don't match dict keys. Dict keys: {list(df.columns)}, Provided columns: {columns}")
                                     # Try to create with provided columns (may fail if mismatch)
-                                    df = pd.DataFrame(data, columns=columns)
+                                    try:
+                                        df = pd.DataFrame(data, columns=columns)
+                                        logger.info(f"✅ Created DataFrame with provided columns despite mismatch")
+                                    except Exception as e:
+                                        logger.error(f"❌ Error: {e}, keeping original DataFrame")
                             else:
-                                df = pd.DataFrame(data, columns=columns)
+                                logger.info(f"🔍 DEBUG: Unknown data structure, trying to create with columns anyway")
+                                try:
+                                    df = pd.DataFrame(data, columns=columns)
+                                except Exception as e:
+                                    logger.error(f"❌ Error: {e}")
+                                    df = pd.DataFrame(data)
+                            
                             logger.info(f"✅ Created DataFrame with {len(columns)} columns: {columns[:5]}..." if len(columns) > 5 else f"✅ Created DataFrame with columns: {columns}")
                             logger.info(f"🔍 DEBUG: DataFrame.columns after creation: {list(df.columns)}")
                             logger.info(f"🔍 DEBUG: DataFrame.shape: {df.shape}")
-                            logger.info(f"🔍 DEBUG: First few column names match? {list(df.columns)[:len(columns)] == columns[:len(df.columns)] if len(df.columns) > 0 else 'N/A'}")
+                            logger.info(f"🔍 DEBUG: Column names match? Expected: {columns}, Got: {list(df.columns)}")
                         else:
                             # No column names provided - try to infer from data structure
                             if is_list_of_dicts:

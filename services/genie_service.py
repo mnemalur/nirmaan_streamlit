@@ -368,6 +368,7 @@ class GenieService:
             'data': result.get('data', []),
             'execution_time': result.get('execution_time'),
             'row_count': result.get('row_count', 0),
+            'columns': result.get('columns'),  # Include column names for DataFrame display
             'conversation_id': conversation_id,
             'prompt': nl_query,
         }
