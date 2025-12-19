@@ -818,28 +818,86 @@ def render_chat_page():
                             st.session_state.selected_codes = selected_codes
                             logger.info(f"Selected {len(selected_codes)} codes via 'Use all'")
                 else:
-                    # Customize mode - show code selection without nested expanders
+                    # Customize mode - show code selection with proper DataFrame display
                     for idx, (cond, cond_codes) in enumerate(grouped.items()):
                         st.markdown(f"### 📋 {cond} ({len(cond_codes)} codes)")
-                        code_df = pd.DataFrame(cond_codes)
-                        display_cols = ['code', 'description', 'vocabulary']
-                        available_cols = [col for col in display_cols if col in code_df.columns]
-                        st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                        
+                        # Create DataFrame with proper column handling
+                        try:
+                            # Normalize code dictionaries to ensure consistent columns
+                            normalized_codes = []
+                            for c in cond_codes:
+                                normalized = {
+                                    'code': c.get('code') or c.get('concept_code') or c.get('source_code') or '',
+                                    'description': c.get('description') or c.get('concept_name') or '',
+                                    'vocabulary': c.get('vocabulary') or c.get('vocabulary_id') or '',
+                                    'confidence': c.get('confidence', '')
+                                }
+                                normalized_codes.append(normalized)
+                            
+                            code_df = pd.DataFrame(normalized_codes)
+                            
+                            # Select columns to display (only show non-empty columns)
+                            display_cols = []
+                            for col in ['code', 'description', 'vocabulary', 'confidence']:
+                                if col in code_df.columns and not code_df[col].isna().all():
+                                    display_cols.append(col)
+                            
+                            if display_cols and not code_df.empty:
+                                # Format confidence as percentage if it's numeric
+                                if 'confidence' in display_cols:
+                                    try:
+                                        code_df['confidence'] = code_df['confidence'].apply(
+                                            lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) else str(x)
+                                        )
+                                    except:
+                                        pass
+                                
+                                # Display DataFrame with proper formatting
+                                st.dataframe(
+                                    code_df[display_cols], 
+                                    use_container_width=True, 
+                                    hide_index=True,
+                                    height=min(300, len(code_df) * 35 + 40)  # Dynamic height
+                                )
+                            else:
+                                # Fallback: show raw data if DataFrame creation fails
+                                st.warning("Could not format codes as table. Showing raw data.")
+                                st.json(cond_codes)
+                        except Exception as e:
+                            logger.error(f"Error displaying codes DataFrame: {e}", exc_info=True)
+                            st.warning(f"Could not display codes as table: {str(e)}")
+                            st.json(cond_codes)
 
-                        label_to_code = {
-                            f"{c.get('code')} – {c.get('description')} ({c.get('vocabulary')})": c
-                            for c in cond_codes
-                        }
+                        # Create selection options from codes (use normalized data if available)
+                        label_to_code = {}
+                        codes_to_use = normalized_codes if 'normalized_codes' in locals() else cond_codes
+                        for c in codes_to_use:
+                            if isinstance(c, dict):
+                                code_val = c.get('code', 'N/A')
+                                desc = c.get('description', 'No description')
+                                vocab = c.get('vocabulary', 'N/A')
+                                label = f"{code_val} – {desc} ({vocab})"
+                                # Store original code dict for later use
+                                label_to_code[label] = c if c in cond_codes else next(
+                                    (orig for orig in cond_codes if orig.get('code') == code_val), c
+                                )
+                        
                         options = list(label_to_code.keys())
 
-                        selected_labels = st.multiselect(
-                            f"Select codes for {cond}:",
-                            options=options,
-                            key=f"codes_select_{idx}",
-                        )
+                        if options:
+                            selected_labels = st.multiselect(
+                                f"Select codes for {cond}:",
+                                options=options,
+                                key=f"codes_select_{idx}",
+                                help=f"Select one or more codes from the {len(cond_codes)} codes found for this condition"
+                            )
 
-                        for label in selected_labels:
-                            selected_codes.append(label_to_code[label])
+                            for label in selected_labels:
+                                if label in label_to_code:
+                                    selected_codes.append(label_to_code[label])
+                        else:
+                            st.warning("No valid codes found for selection.")
                         
                         if idx < len(grouped) - 1:
                             st.markdown("---")  # Separator between conditions
@@ -1059,78 +1117,80 @@ def render_chat_page():
                 with st.expander("📈 Summary Statistics", expanded=False):
                     st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
     
-    # Step 5: Dimension Analysis (always show after Step 4 if genie_result exists)
+    # Step 5: Dimension Analysis (consistent with Steps 1-4: use expander that collapses)
+    cohort_table_info = st.session_state.get("cohort_table_info")
+    dimension_results = st.session_state.get("dimension_results")
+    dimension_analyzing = st.session_state.get("dimension_analyzing", False)
+    cohort_table_creating = st.session_state.get("cohort_table_creating", False)
+    cohort_table_error = st.session_state.get("cohort_table_error")
+    
+    # Determine if Step 5 should be expanded (not expanded if dimension_results exist)
+    step5_expanded = not dimension_results
+    
     if genie_result:
-        st.markdown("---")
-        st.markdown("### 📊 Step 5: Cohort Dimension Analysis")
-        
-        cohort_table_info = st.session_state.get("cohort_table_info")
-        dimension_results = st.session_state.get("dimension_results")
-        dimension_analyzing = st.session_state.get("dimension_analyzing", False)
-        cohort_table_creating = st.session_state.get("cohort_table_creating", False)
-        cohort_table_error = st.session_state.get("cohort_table_error")
-        
-        # Auto-create cohort table if it doesn't exist and we have genie results
-        if not cohort_table_info and not cohort_table_creating and not cohort_table_error and not dimension_results:
-            # Auto-create table in background
-            with st.spinner("Preparing cohort table for dimension analysis..."):
-                try:
-                    create_cohort_table_from_genie_sql()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error creating cohort table: {str(e)}")
-                    logger.error(f"Cohort table creation error: {str(e)}", exc_info=True)
-                    st.session_state.cohort_table_error = str(e)
-        
-        # Show dimension results if available
-        if dimension_results:
-            # Show dimension analysis results in compact grid layout
-            display_dimension_results_compact(dimension_results)
-        
-        # Show status and buttons based on current state
-        elif cohort_table_creating:
-            with st.spinner("Creating cohort table... This may take a moment."):
-                pass  # Will rerun automatically
-        
-        elif cohort_table_error:
-            st.error(f"❌ {cohort_table_error}")
-            if st.button("🔄 Retry Creating Cohort Table", use_container_width=True):
-                st.session_state.cohort_table_error = None
-                st.session_state.cohort_table_creating = True
-                st.rerun()
-        
-        elif dimension_analyzing:
-            with st.spinner("Analyzing cohort dimensions... This may take a minute."):
-                # Execute dimension analysis
-                if cohort_table_info:
+        with st.expander("📊 Step 5: Cohort Dimension Analysis", expanded=step5_expanded):
+            # Auto-create cohort table if it doesn't exist and we have genie results
+            if not cohort_table_info and not cohort_table_creating and not cohort_table_error and not dimension_results:
+                # Auto-create table in background
+                with st.spinner("Preparing cohort table for dimension analysis..."):
                     try:
-                        cohort_table = cohort_table_info.get('cohort_table')
-                        has_medrec = cohort_table_info.get('has_medrec_key', False)
-                        
-                        if cohort_table and hasattr(st.session_state, 'dimension_service'):
-                            # Use dynamic mode: schema discovery + LLM-generated SQL (parallel)
-                            results = st.session_state.dimension_service.analyze_dimensions(
-                                cohort_table=cohort_table,
-                                has_medrec_key=has_medrec,
-                                use_dynamic=True  # Enable dynamic schema-based generation
-                            )
-                            st.session_state.dimension_results = results
-                            st.session_state.dimension_analyzing = False
-                            st.rerun()
-                        else:
-                            st.error("Cannot analyze dimensions: cohort table information missing")
-                            st.session_state.dimension_analyzing = False
+                        create_cohort_table_from_genie_sql()
+                        st.rerun()
                     except Exception as e:
-                        st.error(f"Error analyzing dimensions: {str(e)}")
-                        logger.error(f"Dimension analysis error: {str(e)}", exc_info=True)
-                        st.session_state.dimension_analyzing = False
-        
-        elif cohort_table_info:
-            # Table created, ready for analysis
-            st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
-            if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
-                st.session_state.dimension_analyzing = True
-                st.rerun()
+                        st.error(f"❌ Error creating cohort table: {str(e)}")
+                        logger.error(f"Cohort table creation error: {str(e)}", exc_info=True)
+                        st.session_state.cohort_table_error = str(e)
+            
+            # Show status and buttons based on current state
+            if cohort_table_creating:
+                with st.spinner("Creating cohort table... This may take a moment."):
+                    pass  # Will rerun automatically
+            
+            elif cohort_table_error:
+                st.error(f"❌ {cohort_table_error}")
+                if st.button("🔄 Retry Creating Cohort Table", use_container_width=True):
+                    st.session_state.cohort_table_error = None
+                    st.session_state.cohort_table_creating = True
+                    st.rerun()
+            
+            elif dimension_analyzing:
+                with st.spinner("Analyzing cohort dimensions... This may take a minute."):
+                    # Execute dimension analysis
+                    if cohort_table_info:
+                        try:
+                            cohort_table = cohort_table_info.get('cohort_table')
+                            has_medrec = cohort_table_info.get('has_medrec_key', False)
+                            
+                            if cohort_table and hasattr(st.session_state, 'dimension_service'):
+                                # Use dynamic mode: schema discovery + LLM-generated SQL (parallel)
+                                results = st.session_state.dimension_service.analyze_dimensions(
+                                    cohort_table=cohort_table,
+                                    has_medrec_key=has_medrec,
+                                    use_dynamic=True  # Enable dynamic schema-based generation
+                                )
+                                st.session_state.dimension_results = results
+                                st.session_state.dimension_analyzing = False
+                                st.rerun()
+                            else:
+                                st.error("Cannot analyze dimensions: cohort table information missing")
+                                st.session_state.dimension_analyzing = False
+                        except Exception as e:
+                            st.error(f"Error analyzing dimensions: {str(e)}")
+                            logger.error(f"Dimension analysis error: {str(e)}", exc_info=True)
+                            st.session_state.dimension_analyzing = False
+            
+            elif cohort_table_info:
+                # Table created, ready for analysis
+                st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
+                if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
+                    st.session_state.dimension_analyzing = True
+                    st.rerun()
+    
+    # Show dimension results OUTSIDE the expander (so they're always visible after analysis)
+    if dimension_results:
+        st.markdown("---")
+        # Show dimension analysis results in compact grid layout
+        display_dimension_results_compact(dimension_results)
             
             # Dimension Analysis (cohort table created automatically in background)
             st.markdown("---")
@@ -1383,11 +1443,20 @@ def display_dimension_results_compact(results: dict):
     st.markdown("#### 👥 Patient Demographics")
     demo_col1, demo_col2, demo_col3 = st.columns(3)
     
+    # Professional blue color palette
+    BLUE_PALETTE = ['#1e3a8a', '#3b82f6', '#60a5fa', '#93c5fd', '#dbeafe', '#bfdbfe', '#7c3aed', '#8b5cf6']
+    BLUE_SCALE = 'Blues'
+    
     with demo_col1:
         if dimensions.get('gender'):
             gender_df = pd.DataFrame(dimensions['gender'])
             if not gender_df.empty and 'gender' in gender_df.columns and 'patient_count' in gender_df.columns:
-                fig = go.Figure(data=[go.Pie(labels=gender_df['gender'], values=gender_df['patient_count'], hole=0.4)])
+                fig = go.Figure(data=[go.Pie(
+                    labels=gender_df['gender'], 
+                    values=gender_df['patient_count'], 
+                    hole=0.4,
+                    marker_colors=BLUE_PALETTE[:len(gender_df)]
+                )])
                 fig.update_layout(title='Gender', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
                 st.plotly_chart(fig, use_container_width=True)
     
@@ -1396,7 +1465,8 @@ def display_dimension_results_compact(results: dict):
             race_df = pd.DataFrame(dimensions['race'])
             if not race_df.empty and 'race' in race_df.columns and 'patient_count' in race_df.columns:
                 fig = px.bar(race_df.head(8), x='race', y='patient_count', title='Race (Top 8)', 
-                           labels={'patient_count': 'Count', 'race': 'Race'}, color='patient_count', color_continuous_scale='Greens')
+                           labels={'patient_count': 'Count', 'race': 'Race'}, 
+                           color='patient_count', color_continuous_scale=BLUE_SCALE)
                 fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
     
@@ -1404,7 +1474,12 @@ def display_dimension_results_compact(results: dict):
         if dimensions.get('ethnicity'):
             ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
             if not ethnicity_df.empty and 'ethnicity' in ethnicity_df.columns and 'patient_count' in ethnicity_df.columns:
-                fig = go.Figure(data=[go.Pie(labels=ethnicity_df['ethnicity'], values=ethnicity_df['patient_count'], hole=0.4)])
+                fig = go.Figure(data=[go.Pie(
+                    labels=ethnicity_df['ethnicity'], 
+                    values=ethnicity_df['patient_count'], 
+                    hole=0.4,
+                    marker_colors=BLUE_PALETTE[:len(ethnicity_df)]
+                )])
                 fig.update_layout(title='Ethnicity', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
                 st.plotly_chart(fig, use_container_width=True)
     
@@ -1417,7 +1492,8 @@ def display_dimension_results_compact(results: dict):
             visit_df = pd.DataFrame(dimensions['visit_level'])
             if not visit_df.empty and 'visit_level' in visit_df.columns and 'encounter_count' in visit_df.columns:
                 fig = px.bar(visit_df, x='visit_level', y='encounter_count', title='Visit Level',
-                           labels={'encounter_count': 'Count', 'visit_level': 'Visit Level'}, color='encounter_count', color_continuous_scale='Purples')
+                           labels={'encounter_count': 'Count', 'visit_level': 'Visit Level'}, 
+                           color='encounter_count', color_continuous_scale=BLUE_SCALE)
                 fig.update_layout(height=200, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
     
@@ -1426,7 +1502,8 @@ def display_dimension_results_compact(results: dict):
             admit_type_df = pd.DataFrame(dimensions['admit_type'])
             if not admit_type_df.empty and 'admit_type' in admit_type_df.columns and 'encounter_count' in admit_type_df.columns:
                 fig = px.bar(admit_type_df, x='admit_type', y='encounter_count', title='Admit Type',
-                           labels={'encounter_count': 'Count', 'admit_type': 'Admit Type'}, color='encounter_count', color_continuous_scale='Reds')
+                           labels={'encounter_count': 'Count', 'admit_type': 'Admit Type'}, 
+                           color='encounter_count', color_continuous_scale=BLUE_SCALE)
                 fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
     
@@ -1435,7 +1512,8 @@ def display_dimension_results_compact(results: dict):
             admit_source_df = pd.DataFrame(dimensions['admit_source'])
             if not admit_source_df.empty and 'admit_source' in admit_source_df.columns and 'encounter_count' in admit_source_df.columns:
                 fig = px.bar(admit_source_df.head(8), x='admit_source', y='encounter_count', title='Admit Source (Top 8)',
-                           labels={'encounter_count': 'Count', 'admit_source': 'Admit Source'}, color='encounter_count', color_continuous_scale='Oranges')
+                           labels={'encounter_count': 'Count', 'admit_source': 'Admit Source'}, 
+                           color='encounter_count', color_continuous_scale=BLUE_SCALE)
                 fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
     
@@ -1447,7 +1525,12 @@ def display_dimension_results_compact(results: dict):
         if dimensions.get('urban_rural'):
             urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
             if not urban_rural_df.empty and 'location_type' in urban_rural_df.columns and 'patient_count' in urban_rural_df.columns:
-                fig = go.Figure(data=[go.Pie(labels=urban_rural_df['location_type'], values=urban_rural_df['patient_count'], hole=0.4)])
+                fig = go.Figure(data=[go.Pie(
+                    labels=urban_rural_df['location_type'], 
+                    values=urban_rural_df['patient_count'], 
+                    hole=0.4,
+                    marker_colors=BLUE_PALETTE[:len(urban_rural_df)]
+                )])
                 fig.update_layout(title='Urban/Rural', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
                 st.plotly_chart(fig, use_container_width=True)
     
@@ -1455,7 +1538,12 @@ def display_dimension_results_compact(results: dict):
         if dimensions.get('teaching'):
             teaching_df = pd.DataFrame(dimensions['teaching'])
             if not teaching_df.empty and 'teaching_status' in teaching_df.columns and 'patient_count' in teaching_df.columns:
-                fig = go.Figure(data=[go.Pie(labels=teaching_df['teaching_status'], values=teaching_df['patient_count'], hole=0.4)])
+                fig = go.Figure(data=[go.Pie(
+                    labels=teaching_df['teaching_status'], 
+                    values=teaching_df['patient_count'], 
+                    hole=0.4,
+                    marker_colors=BLUE_PALETTE[:len(teaching_df)]
+                )])
                 fig.update_layout(title='Teaching Status', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
                 st.plotly_chart(fig, use_container_width=True)
     
@@ -1464,7 +1552,8 @@ def display_dimension_results_compact(results: dict):
             bed_count_df = pd.DataFrame(dimensions['bed_count'])
             if not bed_count_df.empty and 'bed_count_group' in bed_count_df.columns and 'patient_count' in bed_count_df.columns:
                 fig = px.bar(bed_count_df, x='bed_count_group', y='patient_count', title='Bed Count Groups',
-                           labels={'patient_count': 'Count', 'bed_count_group': 'Bed Count'}, color='patient_count', color_continuous_scale='Teal')
+                           labels={'patient_count': 'Count', 'bed_count_group': 'Bed Count'}, 
+                           color='patient_count', color_continuous_scale=BLUE_SCALE)
                 fig.update_layout(height=200, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                 st.plotly_chart(fig, use_container_width=True)
     
