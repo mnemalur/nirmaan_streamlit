@@ -1059,70 +1059,78 @@ def render_chat_page():
                 with st.expander("📈 Summary Statistics", expanded=False):
                     st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
     
-    # Step 5: Dimension Analysis (separate section, not nested in Step 4)
-    cohort_table_info = st.session_state.get("cohort_table_info")
-    dimension_results = st.session_state.get("dimension_results")
-    dimension_analyzing = st.session_state.get("dimension_analyzing", False)
-    
-    if genie_result and (cohort_table_info or dimension_results or dimension_analyzing or st.session_state.get("cohort_table_creating")):
+    # Step 5: Dimension Analysis (always show after Step 4 if genie_result exists)
+    if genie_result:
         st.markdown("---")
         st.markdown("### 📊 Step 5: Cohort Dimension Analysis")
         
-        if cohort_table_info:
-            # Table already created, ready for dimension analysis
-            if dimension_results:
-                # Show dimension analysis results in compact grid layout
-                display_dimension_results_compact(dimension_results)
-            elif dimension_analyzing:
-                with st.spinner("Analyzing cohort dimensions... This may take a minute."):
-                    # This will be handled by the button click handler
-                    pass
-            else:
-                st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
-                if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
-                    st.session_state.dimension_analyzing = True
+        cohort_table_info = st.session_state.get("cohort_table_info")
+        dimension_results = st.session_state.get("dimension_results")
+        dimension_analyzing = st.session_state.get("dimension_analyzing", False)
+        cohort_table_creating = st.session_state.get("cohort_table_creating", False)
+        cohort_table_error = st.session_state.get("cohort_table_error")
+        
+        # Auto-create cohort table if it doesn't exist and we have genie results
+        if not cohort_table_info and not cohort_table_creating and not cohort_table_error and not dimension_results:
+            # Auto-create table in background
+            with st.spinner("Preparing cohort table for dimension analysis..."):
+                try:
+                    create_cohort_table_from_genie_sql()
                     st.rerun()
-        elif st.session_state.get("cohort_table_creating"):
-            # Creating table in background
-            with st.spinner("Preparing dimension analysis..."):
-                create_cohort_table_from_genie_sql()
-                st.rerun()
-        elif st.session_state.get("cohort_table_error"):
-            st.error(f"❌ {st.session_state.cohort_table_error}")
-            if st.button("🔄 Retry", use_container_width=True):
+                except Exception as e:
+                    st.error(f"❌ Error creating cohort table: {str(e)}")
+                    logger.error(f"Cohort table creation error: {str(e)}", exc_info=True)
+                    st.session_state.cohort_table_error = str(e)
+        
+        # Show dimension results if available
+        if dimension_results:
+            # Show dimension analysis results in compact grid layout
+            display_dimension_results_compact(dimension_results)
+        
+        # Show status and buttons based on current state
+        elif cohort_table_creating:
+            with st.spinner("Creating cohort table... This may take a moment."):
+                pass  # Will rerun automatically
+        
+        elif cohort_table_error:
+            st.error(f"❌ {cohort_table_error}")
+            if st.button("🔄 Retry Creating Cohort Table", use_container_width=True):
                 st.session_state.cohort_table_error = None
                 st.session_state.cohort_table_creating = True
                 st.rerun()
-        else:
-            # Auto-create table when user clicks to analyze dimensions
-            if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
-                st.session_state.cohort_table_creating = True
-                st.rerun()
         
-        # Handle dimension analysis execution
-        if st.session_state.get("dimension_analyzing"):
-            try:
-                cohort_table = cohort_table_info.get('cohort_table')
-                has_medrec = cohort_table_info.get('has_medrec_key', False)
-                
-                if cohort_table and hasattr(st.session_state, 'dimension_service'):
-                    with st.spinner("Discovering schema and generating dimension queries in parallel..."):
-                        # Use dynamic mode: schema discovery + LLM-generated SQL (parallel)
-                        results = st.session_state.dimension_service.analyze_dimensions(
-                            cohort_table=cohort_table,
-                            has_medrec_key=has_medrec,
-                            use_dynamic=True  # Enable dynamic schema-based generation
-                        )
-                        st.session_state.dimension_results = results
+        elif dimension_analyzing:
+            with st.spinner("Analyzing cohort dimensions... This may take a minute."):
+                # Execute dimension analysis
+                if cohort_table_info:
+                    try:
+                        cohort_table = cohort_table_info.get('cohort_table')
+                        has_medrec = cohort_table_info.get('has_medrec_key', False)
+                        
+                        if cohort_table and hasattr(st.session_state, 'dimension_service'):
+                            # Use dynamic mode: schema discovery + LLM-generated SQL (parallel)
+                            results = st.session_state.dimension_service.analyze_dimensions(
+                                cohort_table=cohort_table,
+                                has_medrec_key=has_medrec,
+                                use_dynamic=True  # Enable dynamic schema-based generation
+                            )
+                            st.session_state.dimension_results = results
+                            st.session_state.dimension_analyzing = False
+                            st.rerun()
+                        else:
+                            st.error("Cannot analyze dimensions: cohort table information missing")
+                            st.session_state.dimension_analyzing = False
+                    except Exception as e:
+                        st.error(f"Error analyzing dimensions: {str(e)}")
+                        logger.error(f"Dimension analysis error: {str(e)}", exc_info=True)
                         st.session_state.dimension_analyzing = False
-                        st.rerun()
-                else:
-                    st.error("Cannot analyze dimensions: cohort table information missing")
-                    st.session_state.dimension_analyzing = False
-            except Exception as e:
-                st.error(f"Error analyzing dimensions: {str(e)}")
-                logger.error(f"Dimension analysis error: {str(e)}", exc_info=True)
-                st.session_state.dimension_analyzing = False
+        
+        elif cohort_table_info:
+            # Table created, ready for analysis
+            st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
+            if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
+                st.session_state.dimension_analyzing = True
+                st.rerun()
             
             # Dimension Analysis (cohort table created automatically in background)
             st.markdown("---")
