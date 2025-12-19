@@ -825,14 +825,18 @@ def render_chat_page():
                     import pandas as pd
                     # Get column names from genie_result if available
                     columns = genie_result.get("columns")
+                    logger.info(f"🔍 DEBUG: columns from genie_result: {columns}, type: {type(columns)}, length: {len(columns) if columns else 0}")
+                    logger.info(f"🔍 DEBUG: genie_result keys: {list(genie_result.keys())}")
                     
                     # Check data structure
                     if data and len(data) > 0:
                         first_row = data[0]
                         is_list_of_dicts = isinstance(first_row, dict)
                         is_list_of_lists = isinstance(first_row, (list, tuple))
+                        logger.info(f"🔍 DEBUG: first_row type: {type(first_row)}, is_list_of_dicts: {is_list_of_dicts}, is_list_of_lists: {is_list_of_lists}")
                         
                         if columns and len(columns) > 0:
+                            logger.info(f"✅ Using extracted columns: {columns}")
                             # Use provided column names
                             if is_list_of_lists:
                                 # Data is list of lists, use columns parameter
@@ -848,7 +852,10 @@ def render_chat_page():
                                     df = pd.DataFrame(data, columns=columns)
                             else:
                                 df = pd.DataFrame(data, columns=columns)
-                            logger.info(f"Created DataFrame with {len(columns)} columns: {columns[:5]}..." if len(columns) > 5 else f"Created DataFrame with columns: {columns}")
+                            logger.info(f"✅ Created DataFrame with {len(columns)} columns: {columns[:5]}..." if len(columns) > 5 else f"✅ Created DataFrame with columns: {columns}")
+                            logger.info(f"🔍 DEBUG: DataFrame.columns after creation: {list(df.columns)}")
+                            logger.info(f"🔍 DEBUG: DataFrame.shape: {df.shape}")
+                            logger.info(f"🔍 DEBUG: First few column names match? {list(df.columns)[:len(columns)] == columns[:len(df.columns)] if len(df.columns) > 0 else 'N/A'}")
                         else:
                             # No column names provided - try to infer from data structure
                             if is_list_of_dicts:
@@ -868,6 +875,10 @@ def render_chat_page():
                     total_rows = len(df)
                     display_df = df.head(MAX_DISPLAY_ROWS)
                     
+                    # Log before display to verify columns are still correct
+                    logger.info(f"🔍 DEBUG: display_df.columns before st.dataframe: {list(display_df.columns)}")
+                    logger.info(f"🔍 DEBUG: Are columns still named (not numeric)? {all(not str(col).isdigit() for col in display_df.columns) if len(display_df.columns) > 0 else 'N/A'}")
+                    
                     # Show info about row limits
                     if total_rows > MAX_DISPLAY_ROWS:
                         st.info(
@@ -883,7 +894,11 @@ def render_chat_page():
                         )
                     
                     # Display the data (already limited to MAX_DISPLAY_ROWS)
+                    # Note: st.dataframe should preserve column names, but let's verify
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
+                    
+                    # Log after display (though this won't help if st.dataframe modifies it)
+                    logger.info(f"🔍 DEBUG: DataFrame columns after st.dataframe call (should be unchanged): {list(display_df.columns)}")
                     
                     # Show summary statistics if numeric columns exist
                     numeric_cols = display_df.select_dtypes(include=['number']).columns

@@ -1264,8 +1264,10 @@ class GenieService:
                                 break
         
         # Log final result
+        columns_in_result = result.get('columns')
         logger.info(f"Extraction complete - SQL: {'Found' if result['sql'] else 'Not found'}, "
                    f"Data rows: {len(result['data'])}, Row count: {result['row_count']}, Execution time: {result['execution_time']}")
+        logger.info(f"📋 Columns in result: {columns_in_result}, count: {len(columns_in_result) if columns_in_result else 0}")
         
         if not result['sql']:
             logger.warning("Could not extract SQL from Genie message. Message structure may be unexpected.")
