@@ -781,7 +781,7 @@ def process_query_conversational(query: str):
                     st.session_state.cohort_count = result_state["cohort_count"]
                 if result_state.get("genie_conversation_id"):
                     st.session_state.genie_conversation_id = result_state["genie_conversation_id"]
-                if result_state.get("waiting_for"):
+                if result_state.get("waiting_for") is not None:
                     st.session_state.waiting_for = result_state["waiting_for"]
                 if result_state.get("counts"):
                     st.session_state.counts = result_state["counts"]
@@ -789,6 +789,8 @@ def process_query_conversational(query: str):
                     st.session_state.codes = result_state["codes"]
                 if result_state.get("selected_codes"):
                     st.session_state.selected_codes = result_state["selected_codes"]
+                if result_state.get("criteria_analysis"):
+                    st.session_state.criteria_analysis = result_state["criteria_analysis"]
                 
                 # Store agent state for next turn
                 st.session_state.agent_state = result_state

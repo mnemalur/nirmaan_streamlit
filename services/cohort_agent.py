@@ -293,6 +293,8 @@ class CohortAgent:
                 )
                 reasoning.append(("Code Search Results", "No codes found via vector search. Will use natural language query directly with Genie."))
             
+            # Set waiting_for to indicate we're waiting for code selection
+            state["waiting_for"] = "code_selection"
             state["reasoning_steps"] = reasoning
             return state
         except Exception as e:
@@ -301,8 +303,6 @@ class CohortAgent:
             state["current_step"] = "error"
             reasoning.append(("Code Search Error", f"Error occurred: {str(e)[:100]}"))
             state["reasoning_steps"] = reasoning
-            # Set waiting_for to indicate we're waiting for code selection
-            state["waiting_for"] = "code_selection"
             return state
     
     def _confirm_codes(self, state: AgentState) -> AgentState:
