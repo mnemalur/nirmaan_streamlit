@@ -261,31 +261,90 @@ class CohortAgent:
         return state
     
     def _search_codes(self, state: AgentState) -> AgentState:
-        """Search for relevant codes using vector search"""
+        """Search for relevant codes using vector search based on structured criteria analysis"""
         reasoning = state.get("reasoning_steps", [])
         reasoning.append(("Vector Search", "Searching for standard clinical codes (ICD, SNOMED, etc.)..."))
         state["reasoning_steps"] = reasoning
         
         try:
-            # Prefer diagnosis phrases extracted by the LLM; fall back to the
-            # full user query if we don't have any.
-            phrases = state.get("diagnosis_phrases") or [state.get("user_query", "")]
-            search_text = "; ".join([p for p in phrases if p])
+            # Use structured criteria_analysis to get conditions, medications, procedures
+            analysis = state.get("criteria_analysis", {})
+            all_codes = []
             
-            if not search_text:
-                logger.warning("No search text available for vector search")
-                state["codes"] = []
-                state["waiting_for"] = "code_selection"
-                reasoning.append(("Code Search Results", "No search text available"))
-                state["reasoning_steps"] = reasoning
-                return state
-
-            logger.info(f"Calling vector search with text: {search_text}")
-            codes = self.vector_service.search_codes(search_text, limit=10)
-            logger.info(f"Vector search returned {len(codes) if codes else 0} codes")
+            # Search for conditions
+            conditions = analysis.get("conditions", [])
+            if conditions:
+                for condition in conditions:
+                    if condition and condition.strip():
+                        try:
+                            logger.info(f"Searching codes for condition: {condition}")
+                            condition_codes = self.vector_service.search_codes(condition.strip(), limit=10)
+                            # Tag each code with the condition it came from
+                            for code in condition_codes:
+                                code = dict(code)  # Make a copy
+                                code["condition"] = condition.strip()
+                                all_codes.append(code)
+                            logger.info(f"Found {len(condition_codes)} codes for condition: {condition}")
+                        except Exception as e:
+                            logger.error(f"Error searching codes for condition '{condition}': {e}")
+                            continue
+            
+            # Search for medications/drugs
+            drugs = analysis.get("drugs", [])
+            if drugs:
+                for drug in drugs:
+                    if drug and drug.strip():
+                        try:
+                            logger.info(f"Searching codes for medication: {drug}")
+                            drug_codes = self.vector_service.search_codes(drug.strip(), limit=10)
+                            # Tag each code with the drug it came from
+                            for code in drug_codes:
+                                code = dict(code)  # Make a copy
+                                code["drug"] = drug.strip()
+                                all_codes.append(code)
+                            logger.info(f"Found {len(drug_codes)} codes for medication: {drug}")
+                        except Exception as e:
+                            logger.error(f"Error searching codes for drug '{drug}': {e}")
+                            continue
+            
+            # Search for procedures
+            procedures = analysis.get("procedures", [])
+            if procedures:
+                for procedure in procedures:
+                    if procedure and procedure.strip():
+                        try:
+                            logger.info(f"Searching codes for procedure: {procedure}")
+                            procedure_codes = self.vector_service.search_codes(procedure.strip(), limit=10)
+                            # Tag each code with the procedure it came from
+                            for code in procedure_codes:
+                                code = dict(code)  # Make a copy
+                                code["procedure"] = procedure.strip()
+                                all_codes.append(code)
+                            logger.info(f"Found {len(procedure_codes)} codes for procedure: {procedure}")
+                        except Exception as e:
+                            logger.error(f"Error searching codes for procedure '{procedure}': {e}")
+                            continue
+            
+            # If no structured analysis or no conditions/drugs/procedures, fall back to diagnosis phrases
+            if not all_codes:
+                phrases = state.get("diagnosis_phrases") or [state.get("user_query", "")]
+                search_text = "; ".join([p for p in phrases if p])
+                
+                if search_text:
+                    logger.info(f"Fallback: Searching codes using diagnosis phrases: {search_text}")
+                    all_codes = self.vector_service.search_codes(search_text, limit=10)
+                else:
+                    logger.warning("No search text available for vector search")
+                    state["codes"] = []
+                    state["waiting_for"] = "code_selection"
+                    reasoning.append(("Code Search Results", "No search text available"))
+                    state["reasoning_steps"] = reasoning
+                    return state
+            
+            logger.info(f"Total codes found: {len(all_codes)}")
             
             # Ensure codes is always a list
-            state["codes"] = codes if codes else []
+            state["codes"] = all_codes if all_codes else []
             
             # Track which vocabularies / coding systems are represented
             # (e.g., ICD10CM, SNOMED, LOINC, etc.)
