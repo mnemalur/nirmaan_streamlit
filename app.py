@@ -876,7 +876,7 @@ def process_query_conversational(query: str):
                         response_parts.append("")
                         response_parts.append("**Would you like me to search for standard clinical codes for these criteria?**")
                         response_text = "\n".join(response_parts)
-                        else:
+                    else:
                         # Fallback if no analysis
                         diagnosis_phrases = result_state.get("diagnosis_phrases", [])
                         if diagnosis_phrases:
