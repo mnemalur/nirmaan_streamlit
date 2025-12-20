@@ -413,10 +413,16 @@ class CohortAgent:
                 state["selected_codes"] = all_codes
                 reasoning.append(("Code Selection", f"Using all {len(all_codes)} codes"))
             elif mode == "selected":
-                # User wants to select specific codes
-                # For now, use all codes (could be enhanced to parse specific codes from query)
-                state["selected_codes"] = all_codes
-                reasoning.append(("Code Selection", f"Using selected codes (currently all {len(all_codes)} codes)"))
+                # User selected specific codes from UI
+                # Check if selected_codes are already in state (from UI)
+                pre_selected = state.get("selected_codes", [])
+                if pre_selected:
+                    state["selected_codes"] = pre_selected
+                    reasoning.append(("Code Selection", f"Using {len(pre_selected)} selected codes from UI"))
+                else:
+                    # Fallback: use all codes if nothing selected
+                    state["selected_codes"] = all_codes
+                    reasoning.append(("Code Selection", f"Using all {len(all_codes)} codes (no specific selection)"))
             elif mode == "excluded":
                 # User wants to exclude certain conditions
                 # For now, use all codes (could be enhanced to filter out excluded conditions)

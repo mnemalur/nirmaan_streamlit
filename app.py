@@ -761,6 +761,14 @@ def process_query_conversational(query: str):
                     "diagnosis_phrases": st.session_state.get("diagnosis_phrases", [])
                 }
                 
+                # If user has selected codes in UI, pass them to agent
+                selection_key = f"code_selection_{st.session_state.session_id}"
+                if selection_key in st.session_state and st.session_state.get("codes"):
+                    selected_code_values = st.session_state[selection_key]
+                    selected_codes = [c for c in st.session_state.get("codes", []) if c.get('code') in selected_code_values]
+                    if selected_codes:
+                        existing_state["selected_codes"] = selected_codes
+                
                 # Process through agent
                 result_state = st.session_state.cohort_agent.process_query(
                     query,
