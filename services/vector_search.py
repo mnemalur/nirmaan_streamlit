@@ -88,11 +88,17 @@ class VectorSearchService:
 
         codes: List[Dict] = []
 
-        with connect(
-            server_hostname=self.server_hostname,
-            http_path=self.http_path,
-            access_token=config.token,
-        ) as conn:
+        # For Databricks runtime, if token is None, use runtime authentication
+        connect_params = {
+            "server_hostname": self.server_hostname,
+            "http_path": self.http_path,
+        }
+        
+        # Only add access_token if we have one (in Databricks runtime, it's optional)
+        if self.token:
+            connect_params["access_token"] = self.token
+        
+        with connect(**connect_params) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(sql)
 
