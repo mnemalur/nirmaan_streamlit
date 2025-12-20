@@ -18,6 +18,7 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     user_query: str
     diagnosis_phrases: list  # phrases extracted by LLM for diagnosis intent
+    criteria_analysis: dict  # Structured breakdown: conditions, drugs, demographics, etc.
     codes: list  # All codes found from vector search
     selected_codes: list  # Codes user selected to use
     excluded_conditions: list  # Conditions user wants to exclude
@@ -74,6 +75,7 @@ class CohortAgent:
             self._route_query,
             {
                 "new_cohort": "interpret_intent",
+                "search_codes": "search_codes",  # User confirmed code search
                 "code_selection": "confirm_codes",  # User responding to code selection
                 "analysis": "ask_for_analysis",  # User wants to analyze
                 "refine": "interpret_intent",  # User wants to refine - start over
@@ -84,8 +86,10 @@ class CohortAgent:
         )
         
         # Flow for new cohort creation (conversational)
-        # 1. Interpret intent → 2. Search codes → 3. STOP (wait for user code selection)
-        workflow.add_edge("interpret_intent", "search_codes")
+        # 1. Interpret intent → STOP (show structured breakdown, ask about code search)
+        workflow.add_edge("interpret_intent", END)  # STOP here - show breakdown, ask about code search
+        
+        # After user confirms code search → 2. Search codes → 3. STOP (wait for user code selection)
         workflow.add_edge("search_codes", END)  # STOP here - wait for user to select codes
         
         # After user selects codes → 4. Confirm codes → 5. Prepare criteria → 6. Generate SQL → 7. Get counts → 8. STOP (ask about analysis)
@@ -110,6 +114,18 @@ class CohortAgent:
         """Classify the user query to determine next action"""
         query = state.get("user_query", "").lower()
         waiting_for = state.get("waiting_for")
+        
+        # If we're waiting for code search confirmation
+        if waiting_for == "code_search_confirmation":
+            # Check if user wants to search for codes
+            if any(phrase in query for phrase in ["yes", "search", "find codes", "look for codes", "get codes", "proceed"]):
+                state["current_step"] = "search_codes"
+                state["waiting_for"] = None
+                return state
+            elif any(phrase in query for phrase in ["no", "skip", "don't search"]):
+                state["error"] = "Code search skipped. Please provide codes or refine your criteria."
+                state["current_step"] = "error"
+                return state
         
         # If we're waiting for code selection, check if user is responding
         if waiting_for == "code_selection":
@@ -166,12 +182,14 @@ class CohortAgent:
         state["current_step"] = "new_cohort"
         return state
     
-    def _route_query(self, state: AgentState) -> Literal["new_cohort", "code_selection", "analysis", "refine", "follow_up", "insights", "error"]:
+    def _route_query(self, state: AgentState) -> Literal["new_cohort", "search_codes", "code_selection", "analysis", "refine", "follow_up", "insights", "error"]:
         """Route to appropriate node based on query type"""
         step = state.get("current_step", "new_cohort")
         
         if step == "new_cohort":
             return "new_cohort"
+        elif step == "search_codes":
+            return "search_codes"
         elif step == "code_selection":
             return "code_selection"
         elif step == "analysis":
@@ -186,7 +204,7 @@ class CohortAgent:
             return "error"
     
     def _interpret_intent(self, state: AgentState) -> AgentState:
-        """Use LLM to extract diagnosis phrases from the user query."""
+        """Use LLM to analyze criteria and extract structured breakdown."""
         query = state.get("user_query", "") or ""
         if not query:
             return state
@@ -196,21 +214,49 @@ class CohortAgent:
         reasoning.append(("Interpret Intent", f"Analyzing your query to extract key clinical concepts..."))
         state["reasoning_steps"] = reasoning
 
-        # If an intent service is wired, use it. Otherwise, fall back to the
-        # raw query as a single phrase.
+        # Use analyze_criteria to get structured breakdown
         try:
             if self.intent_service:
+                # Get structured analysis
+                analysis = self.intent_service.analyze_criteria(query)
+                state["criteria_analysis"] = analysis
+                
+                # Also extract diagnosis phrases for code search
                 phrases = self.intent_service.extract_diagnosis_phrases(query)
-                reasoning.append(("Extract Phrases", f"Found {len(phrases)} key phrase(s): {', '.join(phrases[:3])}"))
+                state["diagnosis_phrases"] = phrases
+                
+                reasoning.append(("Structured Analysis", f"Extracted conditions, demographics, medications, etc."))
             else:
-                phrases = [query]
+                # Fallback: minimal structure
+                analysis = {
+                    "summary": query,
+                    "conditions": [],
+                    "drugs": [],
+                    "procedures": [],
+                    "demographics": [],
+                    "timeframe": "",
+                    "ambiguities": []
+                }
+                state["criteria_analysis"] = analysis
+                state["diagnosis_phrases"] = [query]
                 reasoning.append(("Extract Phrases", "Using full query as search phrase"))
         except Exception as e:
             logger.warning(f"Intent extraction error, using raw query: {e}")
-            phrases = [query]
+            analysis = {
+                "summary": query,
+                "conditions": [],
+                "drugs": [],
+                "procedures": [],
+                "demographics": [],
+                "timeframe": "",
+                "ambiguities": []
+            }
+            state["criteria_analysis"] = analysis
+            state["diagnosis_phrases"] = [query]
             reasoning.append(("Extract Phrases", f"Intent extraction had an issue, using full query: {str(e)[:50]}"))
 
-        state["diagnosis_phrases"] = phrases
+        # Set waiting_for to indicate we're waiting for code search confirmation
+        state["waiting_for"] = "code_search_confirmation"
         state["reasoning_steps"] = reasoning
         return state
     

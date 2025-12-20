@@ -807,8 +807,53 @@ def process_query_conversational(query: str):
                 current_step = result_state.get("current_step", "")
                 waiting_for = result_state.get("waiting_for")
                 
+                # Check if we're waiting for code search confirmation
+                if waiting_for == "code_search_confirmation":
+                    # Show structured breakdown
+                    analysis = result_state.get("criteria_analysis", {})
+                    
+                    if analysis:
+                        response_parts.append("I understood your criteria. Here's what I found:")
+                        response_parts.append("")
+                        
+                        # Show conditions
+                        conditions = analysis.get("conditions", [])
+                        if conditions:
+                            response_parts.append(f"**Conditions:** {', '.join(conditions)}")
+                        
+                        # Show medications
+                        drugs = analysis.get("drugs", [])
+                        if drugs:
+                            response_parts.append(f"**Medications:** {', '.join(drugs)}")
+                        
+                        # Show demographics
+                        demographics = analysis.get("demographics", [])
+                        if demographics:
+                            response_parts.append(f"**Demographics:** {', '.join(demographics)}")
+                        
+                        # Show procedures
+                        procedures = analysis.get("procedures", [])
+                        if procedures:
+                            response_parts.append(f"**Procedures:** {', '.join(procedures)}")
+                        
+                        # Show timeframe
+                        timeframe = analysis.get("timeframe", "")
+                        if timeframe:
+                            response_parts.append(f"**Timeframe:** {timeframe}")
+                        
+                        response_parts.append("")
+                        response_parts.append("**Would you like me to search for standard clinical codes for these criteria?**")
+                        response_text = "\n".join(response_parts)
+                    else:
+                        # Fallback if no analysis
+                        diagnosis_phrases = result_state.get("diagnosis_phrases", [])
+                        if diagnosis_phrases:
+                            response_parts.append(f"I understood you're looking for: **{', '.join(diagnosis_phrases)}**")
+                        response_parts.append("\n\n**Would you like me to search for standard clinical codes?**")
+                        response_text = "\n".join(response_parts)
+                
                 # Check if we're waiting for code selection
-                if waiting_for == "code_selection":
+                elif waiting_for == "code_selection":
                     # Show what I understood
                     diagnosis_phrases = result_state.get("diagnosis_phrases", [])
                     if diagnosis_phrases:
