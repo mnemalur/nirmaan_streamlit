@@ -253,11 +253,15 @@ def run_databricks_health_check():
         http_path = f"/sql/1.0/warehouses/{db_config.warehouse_id}"
 
         # Open a short-lived connection and run a trivial query
-        with connect(
-            server_hostname=server_hostname,
-            http_path=http_path,
-            access_token=db_config.token,
-        ) as conn:
+        # In Databricks runtime, token is optional (uses runtime auth)
+        connect_params = {
+            "server_hostname": server_hostname,
+            "http_path": http_path,
+        }
+        if db_config.token:
+            connect_params["access_token"] = db_config.token
+        
+        with connect(**connect_params) as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1")
                 row = cursor.fetchone()

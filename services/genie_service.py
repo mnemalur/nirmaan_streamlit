@@ -30,8 +30,11 @@ class GenieService:
         # Validate config before creating client
         if not config.host:
             raise ValueError("DATABRICKS_HOST is required")
-        if not config.token:
-            raise ValueError("DATABRICKS_TOKEN is required")
+        
+        # In Databricks runtime, token is optional (uses workspace context)
+        # For local development, token is required
+        if not config.is_databricks_runtime and not config.token:
+            raise ValueError("DATABRICKS_TOKEN is required when running outside Databricks")
         
         # Clear any OAuth env vars that might interfere
         import os
@@ -39,15 +42,32 @@ class GenieService:
                      'DATABRICKS_OAUTH_CLIENT_ID', 'DATABRICKS_OAUTH_CLIENT_SECRET']
         for var in oauth_vars:
             if var in os.environ:
-                logger.warning(f"Removing OAuth env var {var} to use token auth only")
+                logger.warning(f"Removing OAuth env var {var} to use token/runtime auth only")
                 del os.environ[var]
         
-        # Explicitly use only token authentication
-        # WorkspaceClient will prefer OAuth if client_id is in env, so we cleared it above
-        self.w = WorkspaceClient(
-            host=config.host,
-            token=config.token
-        )
+        # Initialize WorkspaceClient
+        # In Databricks runtime, WorkspaceClient() without params uses workspace context
+        # Outside Databricks, we need explicit host and token
+        if config.is_databricks_runtime:
+            # Running in Databricks - use workspace context (no explicit token needed)
+            if config.token:
+                # If token is provided, use it (for cross-workspace access)
+                self.w = WorkspaceClient(
+                    host=config.host,
+                    token=config.token
+                )
+            else:
+                # Use workspace context authentication (default in Databricks)
+                self.w = WorkspaceClient()
+                logger.info("Using Databricks workspace context authentication")
+        else:
+            # Running locally - require explicit token
+            self.w = WorkspaceClient(
+                host=config.host,
+                token=config.token
+            )
+            logger.info("Using explicit token authentication (local development)")
+        
         self.space_id = config.space_id
         self.max_poll_attempts = 150  # 150 attempts * 2 seconds = 5 minutes max (Genie can take time)
         self.poll_interval = 2  # seconds

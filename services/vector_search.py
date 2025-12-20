@@ -20,10 +20,33 @@ class VectorSearchService:
         # Validate config before creating client
         if not config.host:
             raise ValueError("DATABRICKS_HOST is required")
-        if not config.token:
-            raise ValueError("DATABRICKS_TOKEN is required")
         if not config.warehouse_id:
             raise ValueError("SQL_WAREHOUSE_ID is required for vector search")
+        
+        # In Databricks runtime, token can be obtained from runtime context
+        # For local development, token is required
+        if not config.is_databricks_runtime and not config.token:
+            raise ValueError("DATABRICKS_TOKEN is required when running outside Databricks")
+        
+        # Get token - use runtime context in Databricks if available
+        self.token = config.token
+        if config.is_databricks_runtime and not self.token:
+            # Try to get token from dbutils if available
+            try:
+                from pyspark.dbutils import DBUtils
+                from pyspark import SparkContext
+                spark_context = SparkContext.getOrCreate()
+                dbutils = DBUtils(spark_context)
+                # Try to get token from secrets
+                try:
+                    self.token = dbutils.secrets.get(scope="tokens", key="databricks_token")
+                except:
+                    # If no secret, try to get from environment or use None (runtime will handle)
+                    self.token = None
+                    logger.warning("No DATABRICKS_TOKEN found, using Databricks runtime authentication")
+            except:
+                self.token = None
+                logger.warning("Could not access dbutils, using Databricks runtime authentication")
 
         self.server_hostname = config.host.replace("https://", "").replace("http://", "")
         self.http_path = f"/sql/1.0/warehouses/{config.warehouse_id}"
