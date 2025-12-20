@@ -939,16 +939,45 @@ def process_query_conversational(query: str):
                     visits = counts.get("visits", 0)
                     sites = counts.get("sites", 0)
                     
+                    # Check if we have raw count data (extraction failed)
+                    raw_count_data = result_state.get("raw_count_data")
+                    
                     # Debug: Log what we're getting
                     logger.info(f"🔍 UI DEBUG: counts from result_state: {counts}")
                     logger.info(f"🔍 UI DEBUG: patients={patients}, visits={visits}, sites={sites}")
-                    logger.info(f"🔍 UI DEBUG: genie_data length: {len(result_state.get('genie_data', []))}")
-                    logger.info(f"🔍 UI DEBUG: genie_columns: {result_state.get('genie_columns', [])}")
+                    logger.info(f"🔍 UI DEBUG: raw_count_data: {raw_count_data}")
                     
                     response_parts.append("🎉 **Great! I found matching patients for your criteria.**")
                     response_parts.append("")
                     
-                    if patients > 0:
+                    # If extraction failed but we have raw data, try to display it
+                    if raw_count_data and patients == 0:
+                        row = raw_count_data.get("row", {})
+                        columns = raw_count_data.get("columns", [])
+                        
+                        # Try to extract counts from raw data one more time
+                        if isinstance(row, dict):
+                            # Display as a nice table
+                            st.markdown("### 📊 Cohort Summary")
+                            import pandas as pd
+                            count_df = pd.DataFrame([row])
+                            st.dataframe(count_df, use_container_width=True, hide_index=True)
+                            
+                            # Try to extract values for metrics
+                            for key, value in row.items():
+                                key_lower = str(key).lower()
+                                try:
+                                    num_val = int(float(str(value))) if value is not None else 0
+                                    if 'patient' in key_lower:
+                                        patients = num_val
+                                    elif 'visit' in key_lower or 'encounter' in key_lower:
+                                        visits = num_val
+                                    elif 'site' in key_lower or 'provider' in key_lower:
+                                        sites = num_val
+                                except:
+                                    pass
+                    
+                    if patients > 0 or visits > 0 or sites > 0:
                         # Show counts in a prominent way with metrics (displayed before text)
                         st.markdown("### 📊 Cohort Summary")
                         col1, col2, col3 = st.columns(3)
