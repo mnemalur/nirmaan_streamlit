@@ -496,7 +496,8 @@ class CohortAgent:
             demographics = criteria_analysis.get("demographics", [])
             drugs = criteria_analysis.get("drugs", [])
             procedures = criteria_analysis.get("procedures", [])
-            timeframe = criteria_analysis.get("timeframe", "") or "30 days"  # Use extracted timeframe or default
+            # Default to 5 years if user didn't specify, otherwise use their timeframe
+            timeframe = criteria_analysis.get("timeframe", "") or "5 years"
             conditions = criteria_analysis.get("conditions", [])
             
             # Build enriched criteria combining codes with all other criteria
@@ -564,7 +565,8 @@ class CohortAgent:
             demographics = criteria_analysis.get("demographics", [])
             drugs = criteria_analysis.get("drugs", [])
             procedures = criteria_analysis.get("procedures", [])
-            timeframe = criteria_analysis.get("timeframe", "") or "30 days"
+            # Default to 5 years if user didn't specify, otherwise use their timeframe
+            timeframe = criteria_analysis.get("timeframe", "") or "5 years"
             conditions = criteria_analysis.get("conditions", [])
             
             # Build criteria with selected codes AND all other extracted criteria
