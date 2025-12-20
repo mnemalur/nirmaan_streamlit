@@ -579,15 +579,19 @@ class CohortAgent:
         Returns:
             Updated state dictionary with results
         """
-        # Initialize state
+        # Initialize state - preserve important state from previous turns
         initial_state = {
             "messages": [HumanMessage(content=user_query)],
             "user_query": user_query,
             "session_id": session_id,
-            "codes": [],
+            "codes": existing_state.get("codes", []) if existing_state else [],
             "cohort_table": existing_state.get("cohort_table") if existing_state else None,
             "cohort_count": existing_state.get("cohort_count") if existing_state else 0,
             "genie_conversation_id": existing_state.get("genie_conversation_id") if existing_state else None,
+            "waiting_for": existing_state.get("waiting_for") if existing_state else None,
+            "criteria_analysis": existing_state.get("criteria_analysis") if existing_state else None,
+            "diagnosis_phrases": existing_state.get("diagnosis_phrases", []) if existing_state else [],
+            "selected_codes": existing_state.get("selected_codes", []) if existing_state else [],
             "current_step": "",
             "error": None,
             "reasoning_steps": []
