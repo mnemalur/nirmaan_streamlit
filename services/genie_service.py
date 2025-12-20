@@ -373,6 +373,74 @@ class GenieService:
             'prompt': nl_query,
         }
     
+    def start_cohort_query(self, criteria: Dict) -> Dict:
+        """Start a Genie conversation for a cohort query WITHOUT polling.
+        
+        This is for conversational interfaces where we want to return quickly
+        and let the user see progress. Returns immediately with conversation_id
+        and prompt, but no SQL/data yet.
+        
+        Use poll_conversation_status() later to check for completion.
+        """
+        # Health check
+        logger.info("Checking Genie service health before starting conversation...")
+        is_healthy, health_message = self.check_genie_health()
+        if not is_healthy:
+            raise ValueError(f"Genie service is not available: {health_message}")
+        logger.info(f"Genie health check passed: {health_message}")
+        
+        # Build natural language query
+        nl_query = self._build_nl_query(criteria)
+        logger.info(f"Starting Genie conversation (space_id={self.space_id}): {nl_query[:100]}...")
+        
+        # Start conversation
+        if not hasattr(self.w.genie, 'start_conversation'):
+            raise ValueError(
+                "start_conversation method not available. This code requires Genie 2.0 API."
+            )
+        
+        try:
+            response = self.w.genie.start_conversation(
+                space_id=self.space_id,
+                content=nl_query,
+            )
+            
+            # Extract conversation_id and message_id (same logic as create_cohort_query)
+            conversation_id = None
+            message_id = None
+            
+            if hasattr(response, 'conversation_id'):
+                conversation_id = response.conversation_id
+            elif hasattr(response, 'id'):
+                conversation_id = response.id
+            elif hasattr(response, '__dict__'):
+                conversation_id = response.__dict__.get('conversation_id') or response.__dict__.get('id')
+            
+            if hasattr(response, 'message'):
+                message = response.message
+                if hasattr(message, 'id'):
+                    message_id = message.id
+                elif hasattr(message, 'message_id'):
+                    message_id = message.message_id
+            
+            if not conversation_id:
+                raise ValueError(f"Could not extract conversation_id from Genie response: {type(response)}")
+            
+            logger.info(f"Started Genie conversation: {conversation_id}, message_id: {message_id}")
+            
+            return {
+                'conversation_id': conversation_id,
+                'message_id': message_id,
+                'prompt': nl_query,
+                'sql': None,  # Will be available after polling
+                'data': None,
+                'status': 'RUNNING'
+            }
+        except Exception as e:
+            error_msg = f"Failed to start Genie conversation: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            raise ValueError(error_msg)
+    
     def follow_up_question(self, conversation_id: str, question: str) -> Dict:
         """
         Continue existing Genie conversation with polling

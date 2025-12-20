@@ -822,8 +822,10 @@ def process_query_conversational(query: str):
                         with st.expander("🧠 How I'm enriching your request for Genie", expanded=False, key=f"genie_prompt_expander_{msg_idx}"):
                             st.markdown(genie_prompt)
                     
-                    # Show SQL if generated
+                    # Show SQL if generated, or show status if still processing
                     sql = result_state.get("sql")
+                    genie_conversation_id = result_state.get("genie_conversation_id")
+                    
                     if sql:
                         response_parts.append("I've generated a SQL query to find matching patients.")
                         msg_idx = len(st.session_state.messages)
@@ -837,6 +839,14 @@ def process_query_conversational(query: str):
                             if st.button("🚀 Execute Query & Create Cohort", key=button_key):
                                 execute_and_materialize_cohort(result_state)
                                 st.rerun()
+                    elif genie_conversation_id:
+                        # Genie is still processing - offer to check status
+                        response_parts.append("I've started generating SQL with Genie. This may take a moment...")
+                        msg_idx = len(st.session_state.messages)
+                        button_key = f"check_genie_status_{st.session_state.session_id}_{len(st.session_state.messages)}"
+                        if st.button("🔄 Check Genie Status", key=button_key):
+                            check_genie_status(genie_conversation_id)
+                            st.rerun()
                     
                     # Show cohort count if available
                     count = result_state.get("cohort_count", 0)
@@ -905,11 +915,37 @@ def process_query_conversational(query: str):
                 })
 
 
+def check_genie_status(conversation_id: str):
+    """Check Genie conversation status and update session state"""
+    with st.spinner("Checking Genie status..."):
+        try:
+            # Get message_id from conversation if needed
+            # For now, try polling with just conversation_id
+            # The polling method will try to get message_id if needed
+            result = st.session_state.genie_service._poll_for_completion(
+                conversation_id,
+                None  # message_id - will be fetched during polling
+            )
+            
+            # Update session state with results
+            if result.get('sql'):
+                # Update agent state if it exists
+                if 'agent_state' in st.session_state:
+                    st.session_state.agent_state['sql'] = result['sql']
+                    st.session_state.agent_state['cohort_count'] = result.get('row_count', 0)
+                st.success("✅ SQL generated! You can now execute the query.")
+            else:
+                st.info("⏳ Genie is still processing. Please check again in a moment.")
+        except Exception as e:
+            st.error(f"Error checking Genie status: {str(e)}")
+            logger.error(f"Genie status check error: {e}", exc_info=True)
+
+
 def execute_and_materialize_cohort(result_state: dict):
     """Execute SQL and materialize cohort table"""
     sql = result_state.get("sql")
     if not sql:
-        st.error("No SQL available to execute")
+        st.error("No SQL available to execute. Please check Genie status first.")
         return
     
     with st.spinner("Executing query and creating cohort table..."):

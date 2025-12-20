@@ -249,17 +249,16 @@ class CohortAgent:
                     'patient_table_prefix': config.patient_table_prefix
                 }
             
-            result = self.genie_service.create_cohort_query(criteria)
+            # For conversational flow, start Genie conversation without blocking
+            # This returns immediately so the UI doesn't hang
+            result = self.genie_service.start_cohort_query(criteria)
 
             # Get the Genie response
             state["genie_prompt"] = result.get("prompt")
             state["genie_conversation_id"] = result.get('conversation_id')
-            state["sql"] = result.get('sql')
+            state["sql"] = result.get('sql')  # Will be None initially, populated after polling
             
-            if state["sql"]:
-                reasoning.append(("SQL Generated", f"Genie generated SQL query ({len(state['sql'])} characters)"))
-            else:
-                reasoning.append(("SQL Generated", "Genie prompt created, SQL generation pending"))
+            reasoning.append(("Genie Conversation Started", f"Started Genie conversation. SQL generation in progress..."))
             
             state["reasoning_steps"] = reasoning
             return state
