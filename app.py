@@ -1191,40 +1191,6 @@ def render_chat_page():
         st.markdown("---")
         # Show dimension analysis results in compact grid layout
         display_dimension_results_compact(dimension_results)
-                if st.button("🔄 Retry", use_container_width=True):
-                    st.session_state.cohort_table_error = None
-                    st.session_state.cohort_table_creating = True
-                    st.rerun()
-            else:
-                # Auto-create table when user clicks to analyze dimensions
-                if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
-                    st.session_state.cohort_table_creating = True
-                    st.rerun()
-            
-            # Handle dimension analysis execution
-            if dimension_analyzing and cohort_table_info and not dimension_results:
-                try:
-                    cohort_table = cohort_table_info.get('cohort_table')
-                    has_medrec = cohort_table_info.get('has_medrec_key', False)
-                    
-                    if cohort_table and hasattr(st.session_state, 'dimension_service'):
-                        with st.spinner("Discovering schema and generating dimension queries in parallel..."):
-                            # Use dynamic mode: schema discovery + LLM-generated SQL (parallel)
-                            results = st.session_state.dimension_service.analyze_dimensions(
-                                cohort_table=cohort_table,
-                                has_medrec_key=has_medrec,
-                                use_dynamic=True  # Enable dynamic schema-based generation
-                            )
-                            st.session_state.dimension_results = results
-                            st.session_state.dimension_analyzing = False
-                            st.rerun()
-                    else:
-                        st.error("Cannot analyze dimensions: cohort table information missing")
-                        st.session_state.dimension_analyzing = False
-                except Exception as e:
-                    st.error(f"Error analyzing dimensions: {str(e)}")
-                    logger.error(f"Dimension analysis error: {str(e)}", exc_info=True)
-                    st.session_state.dimension_analyzing = False
 
 
 def process_query(query: str):
