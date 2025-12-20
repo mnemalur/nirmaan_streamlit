@@ -874,7 +874,7 @@ def process_query_conversational(query: str):
                         response_parts.append("")
                         response_parts.append("**Would you like me to search for standard clinical codes for these criteria?**")
                         response_text = "\n".join(response_parts)
-                        else:
+                    else:
                         # Fallback if no analysis
                         diagnosis_phrases = result_state.get("diagnosis_phrases", [])
                         if diagnosis_phrases:
@@ -911,12 +911,12 @@ def process_query_conversational(query: str):
                             if st.button("✅ **Use All Codes**", key=f"use_all_{msg_idx}", type="primary", use_container_width=True):
                                 st.session_state.selected_codes = codes
                                 process_query_conversational("use all")
-                    st.rerun()
+                                st.rerun()
                         with col2:
                             if st.button("📋 **Select Specific Codes**", key=f"select_specific_{msg_idx}", use_container_width=True):
                                 # Toggle selection mode - show checkboxes
                                 st.session_state[f"show_selection_{msg_idx}"] = True
-                    st.rerun()
+                                st.rerun()
                         with col3:
                             if st.button("🚫 **Exclude Some**", key=f"exclude_{msg_idx}", use_container_width=True):
                                 # Show exclude UI
@@ -978,24 +978,24 @@ def process_query_conversational(query: str):
                                             if selection_key not in st.session_state:
                                                 st.session_state[selection_key] = []
                                             st.session_state[selection_key].append(code_value)
-                        else:
+                                    else:
                                         # Remove from selection
                                         if code_value in st.session_state.get(selection_key, []):
                                             st.session_state[selection_key].remove(code_value)
-                                
-                                st.markdown("---")
-                                
-                                # Final action button
-                                selected_count = len(st.session_state.get(selection_key, []))
-                                if selected_count > 0:
-                                    if st.button("🚀 **Proceed with Selected Codes**", key=f"proceed_selected_{msg_idx}", type="primary", use_container_width=True):
-                                        selected_codes = [c for c in codes if c.get('code') in st.session_state.get(selection_key, [])]
-                                        st.session_state.selected_codes = selected_codes
-                                        process_query_conversational("use selected codes")
-                                        st.rerun()
-                                    st.success(f"✅ {selected_count} code(s) selected. Click above to proceed.")
-                                else:
-                                    st.warning("⚠️ No codes selected. Please select at least one code above.")
+                            
+                            st.markdown("---")
+                            
+                            # Final action button
+                            selected_count = len(st.session_state.get(selection_key, []))
+                            if selected_count > 0:
+                                if st.button("🚀 **Proceed with Selected Codes**", key=f"proceed_selected_{msg_idx}", type="primary", use_container_width=True):
+                                    selected_codes = [c for c in codes if c.get('code') in st.session_state.get(selection_key, [])]
+                                    st.session_state.selected_codes = selected_codes
+                                    process_query_conversational("use selected codes")
+                                    st.rerun()
+                                st.success(f"✅ {selected_count} code(s) selected. Click above to proceed.")
+                            else:
+                                st.warning("⚠️ No codes selected. Please select at least one code above.")
                         
                         # Don't add text about selection - UI is self-explanatory
                     else:
@@ -1024,7 +1024,7 @@ def process_query_conversational(query: str):
                         with col2:
                             if visits > 0:
                                 st.metric("**Visits**", f"{visits:,}")
-            else:
+                            else:
                                 st.metric("**Visits**", "N/A")
                         with col3:
                             if sites > 0:
@@ -1037,7 +1037,7 @@ def process_query_conversational(query: str):
                             response_parts.append(f"across **{visits:,} visits**")
                         if sites > 0:
                             response_parts.append(f"at **{sites} sites**")
-                            else:
+                    else:
                         response_parts.append("✅ Generated SQL query. Ready to execute.")
                     
                     # Show SQL if available
@@ -1067,11 +1067,11 @@ def process_query_conversational(query: str):
                         # Show codes in expandable section
                         msg_idx = len(st.session_state.messages)
                         with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False):
-                        code_df = pd.DataFrame(codes)
+                            code_df = pd.DataFrame(codes)
                             display_cols = ['code', 'description', 'vocabulary']
-                        available_cols = [col for col in display_cols if col in code_df.columns]
+                            available_cols = [col for col in display_cols if col in code_df.columns]
                             if available_cols:
-                        st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                     
                     # Show Genie prompt/enrichment
                     genie_prompt = result_state.get("genie_prompt")
@@ -1086,7 +1086,7 @@ def process_query_conversational(query: str):
                         response_parts.append("I've generated a SQL query to find matching patients.")
                         msg_idx = len(st.session_state.messages)
                         with st.expander("📝 View Generated SQL", expanded=False):
-                        st.code(sql, language="sql")
+                            st.code(sql, language="sql")
                     
                         # Offer to execute
                         if not result_state.get("cohort_table"):
@@ -1128,7 +1128,7 @@ def process_query_conversational(query: str):
                         if data.get("sql"):
                             msg_idx = len(st.session_state.messages)
                             with st.expander("📝 SQL Used", expanded=False):
-                            st.code(data["sql"], language="sql")
+                                st.code(data["sql"], language="sql")
                         if data.get("data"):
                             st.dataframe(pd.DataFrame(data["data"]), use_container_width=True)
                     else:
@@ -1141,16 +1141,16 @@ def process_query_conversational(query: str):
                 st.markdown(response_text)
                 
                 # Add to message history
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": response_text,
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response_text,
                     "data": {
                         "codes": result_state.get("codes", []),
                         "sql": result_state.get("sql"),
                         "count": result_state.get("cohort_count", 0),
                         "genie_prompt": result_state.get("genie_prompt")
                     }
-                    })
+                })
                 
             except Exception as e:
                 error_msg = f"I encountered an error while processing your request: {str(e)}"
@@ -2036,7 +2036,7 @@ def main():
             if cohort_table:
                 st.success(f"✅ Active Cohort: {cohort_count:,} patients")
                 st.caption(f"Table: `{cohort_table}`")
-                else:
+            else:
                 st.info("💬 Start a conversation to build a cohort")
             
             # Show message count
