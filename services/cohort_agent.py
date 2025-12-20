@@ -129,28 +129,62 @@ class CohortAgent:
         
         # If we're waiting for code selection, check if user is responding
         if waiting_for == "code_selection":
-            # Check for code selection responses
-            if any(phrase in query for phrase in ["use all", "select all", "all codes", "all of them"]):
+            # Check for code selection responses - expanded list of phrases
+            use_all_phrases = [
+                "use all", "select all", "all codes", "all of them", "all", 
+                "use all codes", "take all", "include all", "yes use all",
+                "proceed with all", "all of these", "use them all"
+            ]
+            if any(phrase in query for phrase in use_all_phrases):
                 state["code_selection_mode"] = "all"
                 state["current_step"] = "code_selection"
                 state["waiting_for"] = None
                 return state
-            elif any(phrase in query for phrase in ["use selected", "use selected codes", "selected codes"]):
+            
+            # Check for specific code selection (user might list codes or say "select")
+            selected_phrases = [
+                "use selected", "use selected codes", "selected codes", "use these",
+                "proceed with selected", "use the selected", "go with selected",
+                "use my selection", "use my choices"
+            ]
+            if any(phrase in query for phrase in selected_phrases):
                 # User confirmed selection from UI
                 state["code_selection_mode"] = "selected"
                 state["current_step"] = "code_selection"
                 state["waiting_for"] = None
                 return state
-            elif any(phrase in query for phrase in ["i want to select", "select codes", "choose codes"]):
+            
+            # Check if user wants to select specific codes (but hasn't selected yet)
+            select_phrases = [
+                "i want to select", "select codes", "choose codes", "i want",
+                "let me select", "i'll select", "i need to select", "show me selection",
+                "i want to choose", "let me choose", "i'll choose"
+            ]
+            if any(phrase in query for phrase in select_phrases):
                 # User wants to select - keep waiting_for as code_selection to show UI
                 # Don't change waiting_for, just return to show selection UI
                 state["current_step"] = "code_selection"
                 return state
-            elif any(phrase in query for phrase in ["exclude", "remove", "don't include", "without"]):
+            
+            # Check for exclusion
+            exclude_phrases = [
+                "exclude", "remove", "don't include", "without", "not include",
+                "skip", "ignore", "don't want", "not these"
+            ]
+            if any(phrase in query for phrase in exclude_phrases):
                 state["code_selection_mode"] = "excluded"
                 state["current_step"] = "code_selection"
                 state["waiting_for"] = None
                 # Extract excluded conditions/codes
+                return state
+            
+            # If user mentions specific codes (e.g., "I want E11.9, I50.9"), treat as selection
+            # This is a simple heuristic - could be enhanced with regex
+            if any(char.isdigit() or char == '.' for char in query) and len(query) < 100:
+                # Might be listing codes - treat as wanting to select
+                state["code_selection_mode"] = "selected"
+                state["current_step"] = "code_selection"
+                state["waiting_for"] = None
                 return state
         
         # If we're waiting for analysis decision

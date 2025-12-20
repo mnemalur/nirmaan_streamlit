@@ -902,8 +902,10 @@ def process_query_conversational(query: str):
                         # Show prominent action buttons OUTSIDE the response text
                         msg_idx = len(st.session_state.messages)
                         
-                        # Clear call-to-action
-                        st.info("👆 **Choose how you'd like to proceed with these codes:**")
+                        # Clear call-to-action with instructions
+                        st.info("👆 **Choose how you'd like to proceed with these codes:**\n\n"
+                               "**Option 1:** Click one of the buttons below\n"
+                               "**Option 2:** Type your response in the chat (e.g., 'use all', 'select codes', 'I want codes X, Y, Z')")
                         
                         # Action buttons in a prominent row
                         col1, col2, col3, col4 = st.columns(4)
@@ -997,7 +999,12 @@ def process_query_conversational(query: str):
                             else:
                                 st.warning("⚠️ No codes selected. Please select at least one code above.")
                         
-                        # Don't add text about selection - UI is self-explanatory
+                        # Add helpful text about what user can do
+                        if not response_parts:
+                            response_parts.append(f"I found **{len(codes)} relevant clinical codes**.")
+                        response_parts.append("\n\n💬 **You can:**")
+                        response_parts.append("- **Click** one of the buttons above, OR")
+                        response_parts.append("- **Type** your response below (e.g., 'use all', 'select codes', 'I want codes X, Y, Z')")
                     else:
                         # No codes found
                         response_parts.append("I searched for codes but didn't find any matching results.")
