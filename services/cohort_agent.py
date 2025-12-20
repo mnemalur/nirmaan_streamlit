@@ -440,7 +440,9 @@ class CohortAgent:
     def _prepare_criteria(self, state: AgentState) -> AgentState:
         """Prepare criteria with selected codes for Genie"""
         reasoning = state.get("reasoning_steps", [])
-        reasoning.append(("Prepare Criteria", "I'll use your selected codes to find patients matching your criteria"))
+        selected_codes = state.get("selected_codes", [])
+        reasoning.append(("Update Criteria", f"Updating criteria with {len(selected_codes)} selected codes"))
+        reasoning.append(("Prepare Request", "Preparing enriched request for Genie with your selected codes and criteria"))
         state["reasoning_steps"] = reasoning
         
         try:
@@ -489,7 +491,8 @@ class CohortAgent:
     def _generate_sql(self, state: AgentState) -> AgentState:
         """Generate SQL query using Genie"""
         reasoning = state.get("reasoning_steps", [])
-        reasoning.append(("Generate SQL", "Sending your criteria to Genie to generate SQL..."))
+        reasoning.append(("Send to Genie", "Sending your criteria to Genie to generate SQL query..."))
+        reasoning.append(("Genie Processing", "Genie is analyzing your criteria and generating SQL (this may take a moment)..."))
         state["reasoning_steps"] = reasoning
         
         try:
@@ -552,7 +555,8 @@ class CohortAgent:
     def _get_counts(self, state: AgentState) -> AgentState:
         """Get counts (patients, visits, sites) from Genie result"""
         reasoning = state.get("reasoning_steps", [])
-        reasoning.append(("Get Counts", "Getting patient, visit, and site counts..."))
+        reasoning.append(("Execute Query", "Executing SQL query to find matching patients..."))
+        reasoning.append(("Get Counts", "Calculating patient, visit, and site counts..."))
         state["reasoning_steps"] = reasoning
         
         try:

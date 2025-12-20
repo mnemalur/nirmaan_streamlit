@@ -898,12 +898,12 @@ def process_query_conversational(query: str):
                             if st.button("✅ **Use All Codes**", key=f"use_all_{msg_idx}", type="primary", use_container_width=True):
                                 st.session_state.selected_codes = codes
                                 process_query_conversational("use all")
-                    st.rerun()
+                                st.rerun()
                         with col2:
                             if st.button("📋 **Select Specific Codes**", key=f"select_specific_{msg_idx}", use_container_width=True):
                                 # Toggle selection mode - show checkboxes
                                 st.session_state[f"show_selection_{msg_idx}"] = True
-                    st.rerun()
+                                st.rerun()
                         with col3:
                             if st.button("🚫 **Exclude Some**", key=f"exclude_{msg_idx}", use_container_width=True):
                                 # Show exclude UI
@@ -1012,10 +1012,10 @@ def process_query_conversational(query: str):
                     
                     # Show SQL if available
                     sql = result_state.get("sql")
-            if sql:
+                    if sql:
                         msg_idx = len(st.session_state.messages)
                         with st.expander("📝 View Generated SQL", expanded=False):
-                st.code(sql, language="sql")
+                            st.code(sql, language="sql")
                     
                     # Ask about analysis conversationally
                     response_parts.append("\n\n**Would you like to explore this cohort further, or would you like to adjust your criteria?**")
