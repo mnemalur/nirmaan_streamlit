@@ -717,7 +717,7 @@ def render_chat_page():
                 if isinstance(data, dict):
                     # Show codes if available
                     if "codes" in data and data["codes"]:
-                        with st.expander("📋 Found Codes", expanded=False, key=f"codes_expander_{idx}"):
+                        with st.expander("📋 Found Codes", expanded=False):
                             code_df = pd.DataFrame(data["codes"])
                             display_cols = ['code', 'description', 'vocabulary']
                             available_cols = [col for col in display_cols if col in code_df.columns]
@@ -726,7 +726,7 @@ def render_chat_page():
                     
                     # Show SQL if available
                     if "sql" in data and data["sql"]:
-                        with st.expander("📝 Generated SQL", expanded=False, key=f"sql_expander_{idx}"):
+                        with st.expander("📝 Generated SQL", expanded=False):
                             st.code(data["sql"], language="sql")
                     
                     # Show count if available
@@ -770,7 +770,7 @@ def process_query_conversational(query: str):
                 reasoning_steps = result_state.get("reasoning_steps", [])
                 if reasoning_steps:
                     msg_idx = len(st.session_state.messages)
-                    with st.expander("🔍 What I'm doing (reasoning steps)", expanded=False, key=f"reasoning_expander_{msg_idx}"):
+                    with st.expander("🔍 What I'm doing (reasoning steps)", expanded=False):
                         for step_name, description in reasoning_steps:
                             st.markdown(f"**{step_name}**: {description}")
                 
@@ -821,7 +821,7 @@ def process_query_conversational(query: str):
                         
                         # Show codes in expandable section
                         msg_idx = len(st.session_state.messages)
-                        with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False, key=f"new_codes_expander_{msg_idx}"):
+                        with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False):
                             code_df = pd.DataFrame(codes)
                             display_cols = ['code', 'description', 'vocabulary']
                             available_cols = [col for col in display_cols if col in code_df.columns]
@@ -854,7 +854,7 @@ def process_query_conversational(query: str):
                     sql = result_state.get("sql")
                     if sql:
                         msg_idx = len(st.session_state.messages)
-                        with st.expander("📝 View Generated SQL", expanded=False, key=f"new_sql_expander_{msg_idx}"):
+                        with st.expander("📝 View Generated SQL", expanded=False):
                             st.code(sql, language="sql")
                     
                     # Ask about analysis conversationally
@@ -874,7 +874,7 @@ def process_query_conversational(query: str):
                         
                         # Show codes in expandable section
                         msg_idx = len(st.session_state.messages)
-                        with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False, key=f"new_codes_expander_{msg_idx}"):
+                        with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False):
                             code_df = pd.DataFrame(codes)
                             display_cols = ['code', 'description', 'vocabulary']
                             available_cols = [col for col in display_cols if col in code_df.columns]
@@ -885,7 +885,7 @@ def process_query_conversational(query: str):
                     genie_prompt = result_state.get("genie_prompt")
                     if genie_prompt:
                         msg_idx = len(st.session_state.messages)
-                        with st.expander("🧠 How I'm enriching your request for Genie", expanded=False, key=f"genie_prompt_expander_{msg_idx}"):
+                        with st.expander("🧠 How I'm enriching your request for Genie", expanded=False):
                             st.markdown(genie_prompt)
                     
                     # Show SQL if generated
@@ -893,7 +893,7 @@ def process_query_conversational(query: str):
                     if sql:
                         response_parts.append("I've generated a SQL query to find matching patients.")
                         msg_idx = len(st.session_state.messages)
-                        with st.expander("📝 View Generated SQL", expanded=False, key=f"new_sql_expander_{msg_idx}"):
+                        with st.expander("📝 View Generated SQL", expanded=False):
                             st.code(sql, language="sql")
                         
                         # Offer to execute
@@ -935,7 +935,7 @@ def process_query_conversational(query: str):
                         response_text = "Here's what I found:"
                         if data.get("sql"):
                             msg_idx = len(st.session_state.messages)
-                            with st.expander("📝 SQL Used", expanded=False, key=f"genie_sql_expander_{msg_idx}"):
+                            with st.expander("📝 SQL Used", expanded=False):
                                 st.code(data["sql"], language="sql")
                         if data.get("data"):
                             st.dataframe(pd.DataFrame(data["data"]), use_container_width=True)
