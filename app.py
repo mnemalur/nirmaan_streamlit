@@ -959,7 +959,6 @@ def process_query_conversational(query: str):
                         if isinstance(row, dict):
                             # Display as a nice table
                             st.markdown("### 📊 Cohort Summary")
-                            import pandas as pd
                             count_df = pd.DataFrame([row])
                             st.dataframe(count_df, use_container_width=True, hide_index=True)
                             
