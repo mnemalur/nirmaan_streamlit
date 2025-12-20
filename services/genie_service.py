@@ -46,27 +46,21 @@ class GenieService:
                 del os.environ[var]
         
         # Initialize WorkspaceClient
-        # In Databricks runtime, WorkspaceClient() without params uses workspace context
-        # Outside Databricks, we need explicit host and token
+        # In Databricks runtime, ALWAYS use WorkspaceClient() without params to use workspace context
+        # This avoids "public access not allowed" errors when running inside Databricks
+        # Outside Databricks, we need explicit host and token from .env
         if config.is_databricks_runtime:
-            # Running in Databricks - use workspace context (no explicit token needed)
-            if config.token:
-                # If token is provided, use it (for cross-workspace access)
-                self.w = WorkspaceClient(
-                    host=config.host,
-                    token=config.token
-                )
-            else:
-                # Use workspace context authentication (default in Databricks)
-                self.w = WorkspaceClient()
-                logger.info("Using Databricks workspace context authentication")
+            # Running in Databricks - ALWAYS use workspace context authentication
+            # Even if .env has token, we use workspace context to avoid public access errors
+            self.w = WorkspaceClient()
+            logger.info("Using Databricks workspace context authentication (ignoring .env token when in Databricks)")
         else:
-            # Running locally - require explicit token
+            # Running locally - require explicit token from .env
             self.w = WorkspaceClient(
                 host=config.host,
                 token=config.token
             )
-            logger.info("Using explicit token authentication (local development)")
+            logger.info("Using explicit token authentication from .env (local development)")
         
         self.space_id = config.space_id
         self.max_poll_attempts = 150  # 150 attempts * 2 seconds = 5 minutes max (Genie can take time)
