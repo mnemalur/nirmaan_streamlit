@@ -670,9 +670,8 @@ class CohortAgent:
             else:
                 # Check if Genie returned count results (single row with patient_count, visit_count, site_count)
                 genie_columns = state.get("genie_columns", [])
-                is_count_result = False
                 
-                # Check if this looks like a count result: single row with count-related column names
+                # If Genie returned a single row, it's likely count results - store it for UI to display
                 if genie_data and len(genie_data) == 1:
                     # Check column names to see if this is a count result
                     column_names = [col.lower() if isinstance(col, str) else str(col).lower() for col in genie_columns] if genie_columns else []
@@ -689,122 +688,56 @@ class CohortAgent:
                         except Exception as e:
                             logger.warning(f"Could not convert row to dict: {e}")
                     
+                    # Store the row data for UI to display - simpler and more transparent
                     if isinstance(row, dict):
-                        # Log what we received for debugging
-                        logger.info(f"🔍 DEBUG: Genie returned single row. Columns: {genie_columns}")
-                        logger.info(f"🔍 DEBUG: Row keys: {list(row.keys())}")
-                        logger.info(f"🔍 DEBUG: Row values: {row}")
+                        logger.info(f"🔍 Genie returned count row: {row}")
+                        logger.info(f"🔍 Columns: {genie_columns}")
                         
-                        # Try to extract count values - check multiple possible column name variations
-                        # Case-insensitive matching for column names
-                        patient_count = None
-                        visit_count = None
-                        site_count = None
+                        # Always store raw data for UI to display as dataframe
+                        state["raw_count_data"] = {
+                            "row": row,
+                            "columns": genie_columns
+                        }
                         
-                        # Try exact matches first - iterate through all keys
+                        # Simple extraction - look for common column name patterns
+                        patient_count = 0
+                        visit_count = 0
+                        site_count = 0
+                        
                         for key, value in row.items():
                             key_lower = str(key).lower()
-                            value_num = None
-                            
-                            # Try to convert value to number
                             try:
                                 if value is not None:
-                                    value_num = int(float(str(value))) if str(value) else None
+                                    num_val = int(float(str(value)))
+                                    if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
+                                        patient_count = num_val
+                                    elif ('visit' in key_lower or 'encounter' in key_lower) and ('count' in key_lower or key_lower in ['visits', 'encounter_count']):
+                                        visit_count = num_val
+                                    elif ('site' in key_lower or 'provider' in key_lower) and ('count' in key_lower or key_lower in ['sites', 'provider_count']):
+                                        site_count = num_val
                             except (ValueError, TypeError):
                                 pass
-                            
-                            # Match patient count columns - check SQL column names first, then patterns
-                            if patient_count is None:
-                                # First check if this key matches SQL column names
-                                if key_lower in ['patient_count', 'patientcount'] or (sql_column_names and 'patient_count' in sql_column_names and key_lower in sql_column_names):
-                                    patient_count = value_num if value_num is not None else 0
-                                    logger.info(f"✅ Found patient_count in column '{key}' (from SQL) = {patient_count}")
-                                # Then check patterns
-                                elif ('patient' in key_lower and 'count' in key_lower) or key_lower == 'patients':
-                                    patient_count = value_num if value_num is not None else 0
-                                    logger.info(f"✅ Found patient_count in column '{key}' (pattern match) = {patient_count}")
-                            
-                            # Match visit count columns - check SQL column names first
-                            if visit_count is None:
-                                # First check if this key matches SQL column names
-                                if key_lower in ['visit_count', 'visitcount', 'encounter_count'] or (sql_column_names and 'visit_count' in sql_column_names and key_lower in sql_column_names):
-                                    visit_count = value_num if value_num is not None else 0
-                                    logger.info(f"✅ Found visit_count in column '{key}' (from SQL) = {visit_count}")
-                                # Then check patterns
-                                elif ('visit' in key_lower and 'count' in key_lower) or ('encounter' in key_lower and 'count' in key_lower) or key_lower in ['visits', 'encounter_count']:
-                                    visit_count = value_num if value_num is not None else 0
-                                    logger.info(f"✅ Found visit_count in column '{key}' (pattern match) = {visit_count}")
-                            
-                            # Match site count columns - check SQL column names first
-                            if site_count is None:
-                                # First check if this key matches SQL column names
-                                if key_lower in ['site_count', 'sitecount', 'provider_count'] or (sql_column_names and 'site_count' in sql_column_names and key_lower in sql_column_names):
-                                    site_count = value_num if value_num is not None else 0
-                                    logger.info(f"✅ Found site_count in column '{key}' (from SQL) = {site_count}")
-                                # Then check patterns
-                                elif ('site' in key_lower and 'count' in key_lower) or ('provider' in key_lower and 'count' in key_lower) or key_lower in ['sites', 'provider_count']:
-                                    site_count = value_num if value_num is not None else 0
-                                    logger.info(f"✅ Found site_count in column '{key}' (pattern match) = {site_count}")
                         
-                        # If we found at least one count OR if columns suggest it's a count result, use these values
-                        if patient_count is not None or visit_count is not None or site_count is not None or has_count_columns:
-                            state["counts"] = {
-                                "patients": int(patient_count) if patient_count is not None else 0,
-                                "visits": int(visit_count) if visit_count is not None else 0,
-                                "sites": int(site_count) if site_count is not None else 0
-                            }
-                            logger.info(f"✅ FINAL EXTRACTED COUNTS: patients={state['counts']['patients']}, visits={state['counts']['visits']}, sites={state['counts']['sites']}")
-                            reasoning.append(("Counts", f"Found {state['counts']['patients']} patients, {state['counts']['visits']} visits, {state['counts']['sites']} sites"))
-                        else:
-                            # Fallback: Try to extract ANY numeric values from the row (Genie might use different column names)
-                            logger.warning(f"Couldn't match count columns. Trying to extract any numeric values from row.")
-                            logger.warning(f"Columns: {genie_columns}, Row: {row}")
-                            
-                            # Try to find any numeric values in the row - assume they're counts in order
-                            numeric_values = []
-                            for key, value in row.items():
-                                try:
-                                    if value is not None:
-                                        num_val = int(float(str(value)))
-                                        if num_val >= 0:  # Valid count
-                                            numeric_values.append((key, num_val))
-                                except (ValueError, TypeError):
-                                    pass
-                            
-                            # If we found numeric values, use them (assume order: patients, visits, sites)
-                            if len(numeric_values) >= 1:
-                                # Use first value as patients, second as visits, third as sites
-                                state["counts"] = {
-                                    "patients": numeric_values[0][1] if len(numeric_values) > 0 else 0,
-                                    "visits": numeric_values[1][1] if len(numeric_values) > 1 else 0,
-                                    "sites": numeric_values[2][1] if len(numeric_values) > 2 else 0
-                                }
-                                logger.info(f"✅ EXTRACTED COUNTS FROM NUMERIC VALUES: {numeric_values}")
-                                logger.info(f"✅ FINAL COUNTS: patients={state['counts']['patients']}, visits={state['counts']['visits']}, sites={state['counts']['sites']}")
-                                reasoning.append(("Counts", f"Found {state['counts']['patients']} patients, {state['counts']['visits']} visits, {state['counts']['sites']} sites (extracted from numeric values)"))
-                            else:
-                                # Last resort: Store the raw row data so UI can display it
-                                logger.error(f"Could not extract any counts. Storing raw data for display.")
-                                state["counts"] = {
-                                    "patients": 0,
-                                    "visits": 0,
-                                    "sites": 0
-                                }
-                                # Store raw count data for UI to display
-                                state["raw_count_data"] = {
-                                    "row": row,
-                                    "columns": genie_columns
-                                }
-                                reasoning.append(("Counts", "Could not extract counts - raw data stored for display"))
+                        state["counts"] = {
+                            "patients": patient_count,
+                            "visits": visit_count,
+                            "sites": site_count
+                        }
+                        logger.info(f"✅ Extracted counts: patients={patient_count}, visits={visit_count}, sites={site_count}")
+                        reasoning.append(("Counts", f"Found {patient_count} patients, {visit_count} visits, {site_count} sites"))
                     else:
-                        # Not a dict, can't extract counts
+                        # Not a dict, store as-is
                         logger.warning(f"Genie returned single row but it's not a dict: {type(row)}")
+                        state["raw_count_data"] = {
+                            "row": row,
+                            "columns": genie_columns
+                        }
                         state["counts"] = {
                             "patients": 0,
                             "visits": 0,
                             "sites": 0
                         }
-                        reasoning.append(("Counts", "Could not extract counts - unexpected data format"))
+                        reasoning.append(("Counts", "Stored raw data for display"))
                 else:
                     # Genie returned patient-level data - need to calculate distinct counts
                     # Try to extract distinct counts from the data
