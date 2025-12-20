@@ -297,12 +297,16 @@ class CohortAgent:
                         try:
                             logger.info(f"Searching codes for medication: {drug}")
                             drug_codes = self.vector_service.search_codes(drug.strip(), limit=10)
-                            # Tag each code with the drug it came from
-                            for code in drug_codes:
-                                code = dict(code)  # Make a copy
-                                code["drug"] = drug.strip()
-                                all_codes.append(code)
-                            logger.info(f"Found {len(drug_codes)} codes for medication: {drug}")
+                            # Ensure drug_codes is a list
+                            if drug_codes:
+                                # Tag each code with the drug it came from
+                                for code in drug_codes:
+                                    code = dict(code)  # Make a copy
+                                    code["drug"] = drug.strip()
+                                    all_codes.append(code)
+                                logger.info(f"Found {len(drug_codes)} codes for medication: {drug}")
+                            else:
+                                logger.info(f"No codes found for medication: {drug}")
                         except Exception as e:
                             logger.error(f"Error searching codes for drug '{drug}': {e}")
                             continue
@@ -315,12 +319,16 @@ class CohortAgent:
                         try:
                             logger.info(f"Searching codes for procedure: {procedure}")
                             procedure_codes = self.vector_service.search_codes(procedure.strip(), limit=10)
-                            # Tag each code with the procedure it came from
-                            for code in procedure_codes:
-                                code = dict(code)  # Make a copy
-                                code["procedure"] = procedure.strip()
-                                all_codes.append(code)
-                            logger.info(f"Found {len(procedure_codes)} codes for procedure: {procedure}")
+                            # Ensure procedure_codes is a list
+                            if procedure_codes:
+                                # Tag each code with the procedure it came from
+                                for code in procedure_codes:
+                                    code = dict(code)  # Make a copy
+                                    code["procedure"] = procedure.strip()
+                                    all_codes.append(code)
+                                logger.info(f"Found {len(procedure_codes)} codes for procedure: {procedure}")
+                            else:
+                                logger.info(f"No codes found for procedure: {procedure}")
                         except Exception as e:
                             logger.error(f"Error searching codes for procedure '{procedure}': {e}")
                             continue
@@ -332,7 +340,12 @@ class CohortAgent:
                 
                 if search_text:
                     logger.info(f"Fallback: Searching codes using diagnosis phrases: {search_text}")
-                    all_codes = self.vector_service.search_codes(search_text, limit=10)
+                    fallback_codes = self.vector_service.search_codes(search_text, limit=10)
+                    # Ensure it's a list
+                    if fallback_codes:
+                        all_codes = fallback_codes if isinstance(fallback_codes, list) else list(fallback_codes)
+                    else:
+                        all_codes = []
                 else:
                     logger.warning("No search text available for vector search")
                     state["codes"] = []
@@ -341,20 +354,24 @@ class CohortAgent:
                     state["reasoning_steps"] = reasoning
                     return state
             
+            # Ensure all_codes is always a list
+            if not isinstance(all_codes, list):
+                all_codes = []
+            
             logger.info(f"Total codes found: {len(all_codes)}")
             
             # Ensure codes is always a list
-            state["codes"] = all_codes if all_codes else []
+            state["codes"] = all_codes
             
             # Track which vocabularies / coding systems are represented
             # (e.g., ICD10CM, SNOMED, LOINC, etc.)
-            if codes:
+            if all_codes:
                 vocabularies = sorted(
-                    {c.get("vocabulary") for c in codes if c.get("vocabulary")}
+                    {c.get("vocabulary") for c in all_codes if c.get("vocabulary")}
                 )
                 state["vocabularies"] = vocabularies
-                reasoning.append(("Code Search Results", f"Found {len(codes)} codes across {len(vocabularies)} vocabulary system(s): {', '.join(vocabularies)}"))
-            if not codes:
+                reasoning.append(("Code Search Results", f"Found {len(all_codes)} codes across {len(vocabularies)} vocabulary system(s): {', '.join(vocabularies)}"))
+            else:
                 # No codes from vector search – don't hard fail. We'll fall back
                 # to using only the original user query when building the Genie
                 # request so the LLM still has a chance to interpret intent.
