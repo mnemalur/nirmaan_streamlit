@@ -271,9 +271,21 @@ class CohortAgent:
             # full user query if we don't have any.
             phrases = state.get("diagnosis_phrases") or [state.get("user_query", "")]
             search_text = "; ".join([p for p in phrases if p])
+            
+            if not search_text:
+                logger.warning("No search text available for vector search")
+                state["codes"] = []
+                state["waiting_for"] = "code_selection"
+                reasoning.append(("Code Search Results", "No search text available"))
+                state["reasoning_steps"] = reasoning
+                return state
 
+            logger.info(f"Calling vector search with text: {search_text}")
             codes = self.vector_service.search_codes(search_text, limit=10)
-            state["codes"] = codes
+            logger.info(f"Vector search returned {len(codes) if codes else 0} codes")
+            
+            # Ensure codes is always a list
+            state["codes"] = codes if codes else []
             
             # Track which vocabularies / coding systems are represented
             # (e.g., ICD10CM, SNOMED, LOINC, etc.)

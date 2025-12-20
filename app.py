@@ -799,17 +799,22 @@ def process_query_conversational(query: str):
                 
                 # Handle errors
                 if result_state.get("error"):
-                    st.error(f"❌ {result_state['error']}")
+                    error_msg = f"❌ {result_state['error']}"
+                    st.error(error_msg)
+                    response_text = f"I encountered an error: {result_state['error']}"
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": f"I encountered an error: {result_state['error']}"
+                        "content": response_text
                     })
+                    # Still display the error message
+                    st.markdown(response_text)
                     return
                 
                 # Build conversational response based on what happened
                 response_parts = []
                 current_step = result_state.get("current_step", "")
                 waiting_for = result_state.get("waiting_for")
+                response_text = ""  # Initialize to avoid UnboundLocalError
                 
                 # Check if we're waiting for code search confirmation
                 if waiting_for == "code_search_confirmation":
@@ -879,7 +884,12 @@ def process_query_conversational(query: str):
                         
                         # Ask about code selection conversationally
                         response_parts.append("\n\n**Would you like to use all codes, select specific codes, or exclude certain conditions?**")
-                        response_text = "\n".join(response_parts)
+                    else:
+                        # No codes found
+                        response_parts.append("I searched for codes but didn't find any matching results.")
+                        response_parts.append("Would you like to refine your criteria or proceed with natural language query?")
+                    
+                    response_text = "\n".join(response_parts) if response_parts else "I've searched for codes. See the results above."
                 
                 # Check if we're waiting for analysis decision
                 elif waiting_for == "analysis_decision":
