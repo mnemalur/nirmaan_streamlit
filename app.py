@@ -976,9 +976,28 @@ def render_chat_page():
         
         # Tab 1: Data Table
         with result_tabs[0]:
-
             # Display the actual data if available (limit to 5000 rows max)
             MAX_DISPLAY_ROWS = 5000
+            
+            # Show row count info at top (blue info band for clarity)
+            if row_count is not None and row_count > 0:
+                if data and len(data) > 0:
+                    if len(data) < row_count:
+                        st.info(f"📊 **{row_count:,} total rows** | Showing {len(data):,} rows (max {MAX_DISPLAY_ROWS:,})")
+                    elif len(data) >= MAX_DISPLAY_ROWS:
+                        st.info(f"📊 **{row_count:,} total rows** | Showing first {MAX_DISPLAY_ROWS:,} rows (limited for performance)")
+                    else:
+                        st.info(f"📊 **{row_count:,} rows** (showing all available data)")
+                else:
+                    st.info(f"📊 **{row_count:,} total rows** (data may be truncated)")
+            elif data and len(data) > 0:
+                if len(data) >= MAX_DISPLAY_ROWS:
+                    st.info(f"📊 Showing first {MAX_DISPLAY_ROWS:,} of {len(data):,} rows (limited for performance)")
+                else:
+                    st.info(f"📊 **{len(data):,} rows** (showing all available data)")
+            elif row_count == 0:
+                st.info("📊 **0 rows** - No patients match this criteria")
+            
             if data and len(data) > 0:
                 try:
                     # Convert data to DataFrame for better display
@@ -1098,8 +1117,6 @@ def render_chat_page():
                     f"- Data extraction encountered an issue\n\n"
                     f"You can use the generated SQL in the 'View SQL' tab to query the full dataset directly."
                 )
-            elif row_count == 0:
-                st.info("📊 **0 rows** - No patients match this criteria")
         
         # Tab 2: View SQL
         with result_tabs[1]:
