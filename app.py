@@ -756,7 +756,9 @@ def process_query_conversational(query: str):
                     "genie_conversation_id": st.session_state.get("genie_conversation_id"),
                     "waiting_for": st.session_state.get("waiting_for"),
                     "codes": st.session_state.get("codes", []),
-                    "selected_codes": st.session_state.get("selected_codes", [])
+                    "selected_codes": st.session_state.get("selected_codes", []),
+                    "criteria_analysis": st.session_state.get("criteria_analysis"),
+                    "diagnosis_phrases": st.session_state.get("diagnosis_phrases", [])
                 }
                 
                 # Process through agent
