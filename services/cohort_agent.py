@@ -479,18 +479,27 @@ class CohortAgent:
             return state
     
     def _prepare_criteria(self, state: AgentState) -> AgentState:
-        """Prepare criteria with selected codes for Genie"""
+        """Prepare criteria with selected codes AND all other extracted criteria (demographics, medications, etc.) for Genie"""
         reasoning = state.get("reasoning_steps", [])
         selected_codes = state.get("selected_codes", [])
+        criteria_analysis = state.get("criteria_analysis", {})
+        
         reasoning.append(("Update Criteria", f"Updating criteria with {len(selected_codes)} selected codes"))
-        reasoning.append(("Prepare Request", "Preparing enriched request for Genie with your selected codes and criteria"))
+        reasoning.append(("Combine Criteria", "Combining selected codes with demographics, medications, and other criteria you specified"))
         state["reasoning_steps"] = reasoning
         
         try:
             selected_codes = state.get("selected_codes", [])
             original_query = state.get("user_query", "")
             
-            # Build criteria with selected codes
+            # Extract all criteria components from structured analysis
+            demographics = criteria_analysis.get("demographics", [])
+            drugs = criteria_analysis.get("drugs", [])
+            procedures = criteria_analysis.get("procedures", [])
+            timeframe = criteria_analysis.get("timeframe", "") or "30 days"  # Use extracted timeframe or default
+            conditions = criteria_analysis.get("conditions", [])
+            
+            # Build enriched criteria combining codes with all other criteria
             if selected_codes:
                 criteria = {
                     'codes': [c.get('code') for c in selected_codes if c.get('code')],
@@ -504,18 +513,27 @@ class CohortAgent:
                         for c in selected_codes
                     ],
                     'vocabularies': state.get("vocabularies", []),
-                    'timeframe': '30 days',  # Could extract from query later
-                    'age': None,  # Could extract from query later
+                    # Include all extracted criteria
+                    'demographics': demographics,
+                    'drugs': drugs,
+                    'procedures': procedures,
+                    'conditions': conditions,  # Original conditions from analysis
+                    'timeframe': timeframe,
+                    'age': None,  # Could extract from demographics later
                     'patient_table_prefix': config.patient_table_prefix
                 }
             else:
-                # Fallback to original query only
+                # Fallback to original query with extracted criteria
                 criteria = {
                     'codes': [],
                     'original_query': original_query,
                     'code_details': [],
                     'vocabularies': [],
-                    'timeframe': '30 days',
+                    'demographics': demographics,
+                    'drugs': drugs,
+                    'procedures': procedures,
+                    'conditions': conditions,
+                    'timeframe': timeframe,
                     'age': None,
                     'patient_table_prefix': config.patient_table_prefix
                 }
@@ -530,7 +548,7 @@ class CohortAgent:
             return state
     
     def _generate_sql(self, state: AgentState) -> AgentState:
-        """Generate SQL query using Genie"""
+        """Generate SQL query using Genie with selected codes AND all other criteria"""
         reasoning = state.get("reasoning_steps", [])
         reasoning.append(("Send to Genie", "Sending your criteria to Genie to generate SQL query..."))
         reasoning.append(("Genie Processing", "Genie is analyzing your criteria and generating SQL (this may take a moment)..."))
@@ -540,8 +558,16 @@ class CohortAgent:
             # Use selected_codes from code selection step
             selected_codes = state.get("selected_codes", [])
             original_query = state.get("user_query", "")
+            criteria_analysis = state.get("criteria_analysis", {})
             
-            # Build criteria with selected codes
+            # Extract all criteria components from structured analysis
+            demographics = criteria_analysis.get("demographics", [])
+            drugs = criteria_analysis.get("drugs", [])
+            procedures = criteria_analysis.get("procedures", [])
+            timeframe = criteria_analysis.get("timeframe", "") or "30 days"
+            conditions = criteria_analysis.get("conditions", [])
+            
+            # Build criteria with selected codes AND all other extracted criteria
             if selected_codes:
                 criteria = {
                     'codes': [c.get('code') for c in selected_codes if c.get('code')],
@@ -555,18 +581,27 @@ class CohortAgent:
                         for c in selected_codes
                     ],
                     'vocabularies': state.get("vocabularies", []),
-                    'timeframe': '30 days',
+                    # Include all extracted criteria
+                    'demographics': demographics,
+                    'drugs': drugs,
+                    'procedures': procedures,
+                    'conditions': conditions,
+                    'timeframe': timeframe,
                     'age': None,
                     'patient_table_prefix': config.patient_table_prefix
                 }
             else:
-                # Fallback to original query only
+                # Fallback to original query with extracted criteria
                 criteria = {
                     'codes': [],
                     'original_query': original_query,
                     'code_details': [],
                     'vocabularies': [],
-                    'timeframe': '30 days',
+                    'demographics': demographics,
+                    'drugs': drugs,
+                    'procedures': procedures,
+                    'conditions': conditions,
+                    'timeframe': timeframe,
                     'age': None,
                     'patient_table_prefix': config.patient_table_prefix
                 }

@@ -1435,9 +1435,29 @@ class GenieService:
                 # Fallback: we only have raw codes
                 lines.append(f"- codes: {', '.join(codes)}")
 
+        # Additional criteria: demographics, medications, procedures
+        demographics = criteria.get("demographics", [])
+        drugs = criteria.get("drugs", [])
+        procedures = criteria.get("procedures", [])
+        conditions = criteria.get("conditions", [])
+        
         # High-level filters
         lines.append("")
         lines.append("Additional cohort filters (high-level, you choose columns/tables):")
+        
+        if demographics:
+            lines.append(f"- demographics: {', '.join(demographics)}")
+        
+        if drugs:
+            lines.append(f"- medications/drugs: {', '.join(drugs)}")
+        
+        if procedures:
+            lines.append(f"- procedures: {', '.join(procedures)}")
+        
+        if conditions and not code_details and not codes:
+            # If we have conditions but no codes yet, include them
+            lines.append(f"- conditions: {', '.join(conditions)}")
+        
         if timeframe:
             lines.append(f"- timeframe: within the last {timeframe}")
         else:
@@ -1452,7 +1472,14 @@ class GenieService:
         lines.append("")
         lines.append("Requirements for the SQL you generate:")
         lines.append("- Use the appropriate tables and joins from our existing data model.")
-        lines.append("- Use EXACTLY the diagnosis codes listed above for the primary condition filter.")
+        if code_details or codes:
+            lines.append("- Use EXACTLY the diagnosis codes listed above for the primary condition filter.")
+        if drugs:
+            lines.append("- Include patients who have been prescribed or taken the medications listed above.")
+        if procedures:
+            lines.append("- Include patients who have undergone the procedures listed above.")
+        if demographics:
+            lines.append("- Apply the demographic filters listed above (age, sex, setting, etc.).")
         lines.append("- Apply the additional filters where appropriate.")
         lines.append("- Return a coherent patient cohort result set (one row per patient/encounter as appropriate).")
 
