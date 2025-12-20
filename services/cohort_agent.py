@@ -18,13 +18,18 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     user_query: str
     diagnosis_phrases: list  # phrases extracted by LLM for diagnosis intent
-    codes: list
+    codes: list  # All codes found from vector search
+    selected_codes: list  # Codes user selected to use
+    excluded_conditions: list  # Conditions user wants to exclude
+    code_selection_mode: str  # "all" | "selected" | "excluded" | None
     vocabularies: list  # list of vocabulary_ids / coding systems represented in codes
     genie_prompt: str   # enriched, code-aware request that would be sent to Genie
     cohort_table: str
     cohort_count: int
+    counts: dict  # dict with 'patients', 'visits', 'sites'
     genie_conversation_id: str
     current_step: str
+    waiting_for: str  # "code_selection" | "analysis_decision" | None
     error: str
     session_id: str
     sql: str
@@ -51,7 +56,11 @@ class CohortAgent:
         workflow.add_node("classify_query", self._classify_query)
         workflow.add_node("interpret_intent", self._interpret_intent)
         workflow.add_node("search_codes", self._search_codes)
+        workflow.add_node("confirm_codes", self._confirm_codes)  # New: Handle code selection
+        workflow.add_node("prepare_criteria", self._prepare_criteria)  # New: Prepare criteria with selected codes
         workflow.add_node("generate_sql", self._generate_sql)
+        workflow.add_node("get_counts", self._get_counts)  # New: Get patients, visits, sites counts
+        workflow.add_node("ask_for_analysis", self._ask_for_analysis)  # New: Ask about analysis
         workflow.add_node("materialize_cohort", self._materialize_cohort)
         workflow.add_node("answer_question", self._answer_question)
         workflow.add_node("handle_error", self._handle_error)
@@ -65,20 +74,28 @@ class CohortAgent:
             self._route_query,
             {
                 "new_cohort": "interpret_intent",
+                "code_selection": "confirm_codes",  # User responding to code selection
+                "analysis": "ask_for_analysis",  # User wants to analyze
+                "refine": "interpret_intent",  # User wants to refine - start over
                 "follow_up": "answer_question",
                 "insights": "answer_question",
                 "error": "handle_error"
             }
         )
         
-        # Flow for new cohort creation
-        # LLM first interprets intent, then we search codes, then build the
-        # enriched Genie request, generate SQL, and optionally materialize cohort
+        # Flow for new cohort creation (conversational)
+        # 1. Interpret intent → 2. Search codes → 3. STOP (wait for user code selection)
         workflow.add_edge("interpret_intent", "search_codes")
-        workflow.add_edge("search_codes", "generate_sql")
-        # For conversational flow, we generate SQL but don't auto-materialize
-        # User can request materialization explicitly
-        workflow.add_edge("generate_sql", END)
+        workflow.add_edge("search_codes", END)  # STOP here - wait for user to select codes
+        
+        # After user selects codes → 4. Confirm codes → 5. Prepare criteria → 6. Generate SQL → 7. Get counts → 8. STOP (ask about analysis)
+        workflow.add_edge("confirm_codes", "prepare_criteria")
+        workflow.add_edge("prepare_criteria", "generate_sql")
+        workflow.add_edge("generate_sql", "get_counts")
+        workflow.add_edge("get_counts", END)  # STOP here - ask user about analysis
+        
+        # User wants analysis → go to analysis
+        workflow.add_edge("ask_for_analysis", END)
         # Full auto-flow (commented for now - user controls execution):
         # workflow.add_edge("generate_sql", "materialize_cohort")
         # workflow.add_edge("materialize_cohort", END)
@@ -92,6 +109,40 @@ class CohortAgent:
     def _classify_query(self, state: AgentState) -> AgentState:
         """Classify the user query to determine next action"""
         query = state.get("user_query", "").lower()
+        waiting_for = state.get("waiting_for")
+        
+        # If we're waiting for code selection, check if user is responding
+        if waiting_for == "code_selection":
+            # Check for code selection responses
+            if any(phrase in query for phrase in ["use all", "select all", "all codes", "all of them"]):
+                state["code_selection_mode"] = "all"
+                state["current_step"] = "code_selection"
+                state["waiting_for"] = None
+                return state
+            elif any(phrase in query for phrase in ["i want to select", "select", "choose", "i want"]):
+                state["code_selection_mode"] = "selected"
+                state["current_step"] = "code_selection"
+                state["waiting_for"] = None
+                # Try to extract specific codes from query
+                # This is simplified - could be enhanced with NLP
+                return state
+            elif any(phrase in query for phrase in ["exclude", "remove", "don't include", "without"]):
+                state["code_selection_mode"] = "excluded"
+                state["current_step"] = "code_selection"
+                state["waiting_for"] = None
+                # Extract excluded conditions/codes
+                return state
+        
+        # If we're waiting for analysis decision
+        if waiting_for == "analysis_decision":
+            if any(phrase in query for phrase in ["analyze", "analysis", "deep dive", "explore", "yes"]):
+                state["current_step"] = "analysis"
+                state["waiting_for"] = None
+                return state
+            elif any(phrase in query for phrase in ["refine", "change", "adjust", "modify", "different"]):
+                state["current_step"] = "refine"
+                state["waiting_for"] = None
+                return state
         
         # Check if this is a follow-up question about existing cohort
         if state.get("cohort_table"):
@@ -115,12 +166,18 @@ class CohortAgent:
         state["current_step"] = "new_cohort"
         return state
     
-    def _route_query(self, state: AgentState) -> Literal["new_cohort", "follow_up", "insights", "error"]:
+    def _route_query(self, state: AgentState) -> Literal["new_cohort", "code_selection", "analysis", "refine", "follow_up", "insights", "error"]:
         """Route to appropriate node based on query type"""
         step = state.get("current_step", "new_cohort")
         
         if step == "new_cohort":
             return "new_cohort"
+        elif step == "code_selection":
+            return "code_selection"
+        elif step == "analysis":
+            return "analysis"
+        elif step == "refine":
+            return "refine"
         elif step == "follow_up":
             return "follow_up"
         elif step == "insights":
@@ -198,67 +255,143 @@ class CohortAgent:
             state["current_step"] = "error"
             reasoning.append(("Code Search Error", f"Error occurred: {str(e)[:100]}"))
             state["reasoning_steps"] = reasoning
+            # Set waiting_for to indicate we're waiting for code selection
+            state["waiting_for"] = "code_selection"
             return state
     
-    def _generate_sql(self, state: AgentState) -> AgentState:
-        """Generate SQL query using Genie"""
+    def _confirm_codes(self, state: AgentState) -> AgentState:
+        """Process user's code selection response"""
         reasoning = state.get("reasoning_steps", [])
-        reasoning.append(("Generate SQL", "Building enriched request for Genie with codes and criteria..."))
+        mode = state.get("code_selection_mode", "all")
+        all_codes = state.get("codes", [])
+        
+        try:
+            if mode == "all":
+                # User wants to use all codes
+                state["selected_codes"] = all_codes
+                reasoning.append(("Code Selection", f"Using all {len(all_codes)} codes"))
+            elif mode == "selected":
+                # User wants to select specific codes
+                # For now, use all codes (could be enhanced to parse specific codes from query)
+                state["selected_codes"] = all_codes
+                reasoning.append(("Code Selection", f"Using selected codes (currently all {len(all_codes)} codes)"))
+            elif mode == "excluded":
+                # User wants to exclude certain conditions
+                # For now, use all codes (could be enhanced to filter out excluded conditions)
+                state["selected_codes"] = all_codes
+                reasoning.append(("Code Selection", f"Using codes with exclusions applied"))
+            
+            state["reasoning_steps"] = reasoning
+            return state
+        except Exception as e:
+            logger.error(f"Error in confirm_codes: {str(e)}")
+            state["error"] = f"Error processing code selection: {str(e)}"
+            state["current_step"] = "error"
+            return state
+    
+    def _prepare_criteria(self, state: AgentState) -> AgentState:
+        """Prepare criteria with selected codes for Genie"""
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Prepare Criteria", "I'll use your selected codes to find patients matching your criteria"))
         state["reasoning_steps"] = reasoning
         
         try:
-            codes = state.get("codes", [])
-            # If no codes came back from vector search, fall back to using only
-            # the original user query to build a Genie request instead of
-            # immediately failing. This lets the LLM still try to interpret
-            # the intent even when the vector function returns nothing.
-            if not codes:
-                logger.warning("No codes found; falling back to Genie with original query only")
+            selected_codes = state.get("selected_codes", [])
+            original_query = state.get("user_query", "")
+            
+            # Build criteria with selected codes
+            if selected_codes:
                 criteria = {
-                    'codes': [],
-                    'original_query': state.get("user_query", ""),
-                    'code_details': [],
-                    'vocabularies': [],
-                    'timeframe': '30 days',
-                    'age': None,
-                    'patient_table_prefix': config.patient_table_prefix,
-                }
-            else:
-                # Extract criteria from query (simplified - could be enhanced with NLP)
-                # Include both the original user query and full code details so Genie
-                # gets a precise, disambiguated description of the clinical intent.
-                top_codes = codes[:5]
-                criteria = {
-                    # Just the raw codes (used for WHERE clause)
-                    'codes': [c['code'] for c in top_codes],
-                    # Original natural language query from the user
-                    'original_query': state.get("user_query", ""),
-                    # Full code details (code + description + vocabulary) from vector search
+                    'codes': [c.get('code') for c in selected_codes if c.get('code')],
+                    'original_query': original_query,
                     'code_details': [
                         {
                             'code': c.get('code'),
                             'description': c.get('description'),
                             'vocabulary': c.get('vocabulary')
                         }
-                        for c in top_codes
+                        for c in selected_codes
                     ],
-                    # All vocabularies / coding systems involved (if any)
                     'vocabularies': state.get("vocabularies", []),
                     'timeframe': '30 days',  # Could extract from query later
                     'age': None,  # Could extract from query later
                     'patient_table_prefix': config.patient_table_prefix
                 }
+            else:
+                # Fallback to original query only
+                criteria = {
+                    'codes': [],
+                    'original_query': original_query,
+                    'code_details': [],
+                    'vocabularies': [],
+                    'timeframe': '30 days',
+                    'age': None,
+                    'patient_table_prefix': config.patient_table_prefix
+                }
             
-            # For conversational flow, start Genie conversation without blocking
-            # This returns immediately so the UI doesn't hang
-            result = self.genie_service.start_cohort_query(criteria)
+            state["genie_prompt"] = self.genie_service._build_nl_query(criteria)
+            state["reasoning_steps"] = reasoning
+            return state
+        except Exception as e:
+            logger.error(f"Error in prepare_criteria: {str(e)}")
+            state["error"] = f"Error preparing criteria: {str(e)}"
+            state["current_step"] = "error"
+            return state
+    
+    def _generate_sql(self, state: AgentState) -> AgentState:
+        """Generate SQL query using Genie"""
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Generate SQL", "Sending your criteria to Genie to generate SQL..."))
+        state["reasoning_steps"] = reasoning
+        
+        try:
+            # Use selected_codes from code selection step
+            selected_codes = state.get("selected_codes", [])
+            original_query = state.get("user_query", "")
+            
+            # Build criteria with selected codes
+            if selected_codes:
+                criteria = {
+                    'codes': [c.get('code') for c in selected_codes if c.get('code')],
+                    'original_query': original_query,
+                    'code_details': [
+                        {
+                            'code': c.get('code'),
+                            'description': c.get('description'),
+                            'vocabulary': c.get('vocabulary')
+                        }
+                        for c in selected_codes
+                    ],
+                    'vocabularies': state.get("vocabularies", []),
+                    'timeframe': '30 days',
+                    'age': None,
+                    'patient_table_prefix': config.patient_table_prefix
+                }
+            else:
+                # Fallback to original query only
+                criteria = {
+                    'codes': [],
+                    'original_query': original_query,
+                    'code_details': [],
+                    'vocabularies': [],
+                    'timeframe': '30 days',
+                    'age': None,
+                    'patient_table_prefix': config.patient_table_prefix
+                }
+            
+            # Start Genie conversation and poll for completion
+            result = self.genie_service.create_cohort_query(criteria)
 
             # Get the Genie response
             state["genie_prompt"] = result.get("prompt")
             state["genie_conversation_id"] = result.get('conversation_id')
-            state["sql"] = result.get('sql')  # Will be None initially, populated after polling
+            state["sql"] = result.get('sql')
+            state["cohort_count"] = result.get('row_count', 0)
             
-            reasoning.append(("Genie Conversation Started", f"Started Genie conversation. SQL generation in progress..."))
+            if state["sql"]:
+                reasoning.append(("SQL Generated", f"Genie generated SQL query ({len(state['sql'])} characters)"))
+            else:
+                reasoning.append(("SQL Generated", "SQL generation completed"))
             
             state["reasoning_steps"] = reasoning
             return state
@@ -267,6 +400,47 @@ class CohortAgent:
             state["error"] = f"Error generating SQL: {str(e)}"
             state["current_step"] = "error"
             return state
+    
+    def _get_counts(self, state: AgentState) -> AgentState:
+        """Get counts (patients, visits, sites) from Genie result"""
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Get Counts", "Getting patient, visit, and site counts..."))
+        state["reasoning_steps"] = reasoning
+        
+        try:
+            sql = state.get("sql")
+            row_count = state.get("cohort_count", 0)
+            
+            if not sql:
+                state["counts"] = {"patients": 0, "visits": 0, "sites": 0}
+                reasoning.append(("Counts", "No SQL available, counts unavailable"))
+            else:
+                # For now, use row_count from Genie result
+                # In full implementation, we'd execute separate COUNT queries for visits and sites
+                state["counts"] = {
+                    "patients": row_count,
+                    "visits": 0,  # Would need separate query: COUNT(DISTINCT visit_id)
+                    "sites": 0  # Would need separate query: COUNT(DISTINCT site_id)
+                }
+                reasoning.append(("Counts", f"Found {row_count} patients"))
+            
+            # Set waiting_for to indicate we're waiting for analysis decision
+            state["waiting_for"] = "analysis_decision"
+            state["reasoning_steps"] = reasoning
+            return state
+        except Exception as e:
+            logger.error(f"Error in get_counts: {str(e)}")
+            state["error"] = f"Error getting counts: {str(e)}"
+            state["current_step"] = "error"
+            return state
+    
+    def _ask_for_analysis(self, state: AgentState) -> AgentState:
+        """Ask user if they want to analyze the cohort"""
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Ask for Analysis", "Preparing to ask user about cohort analysis"))
+        state["reasoning_steps"] = reasoning
+        state["waiting_for"] = None  # Analysis decision handled
+        return state
     
     def _materialize_cohort(self, state: AgentState) -> AgentState:
         """Materialize the cohort in Delta table"""

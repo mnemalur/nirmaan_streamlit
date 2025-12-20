@@ -753,7 +753,10 @@ def process_query_conversational(query: str):
                 existing_state = {
                     "cohort_table": st.session_state.get("cohort_table"),
                     "cohort_count": st.session_state.get("cohort_count", 0),
-                    "genie_conversation_id": st.session_state.get("genie_conversation_id")
+                    "genie_conversation_id": st.session_state.get("genie_conversation_id"),
+                    "waiting_for": st.session_state.get("waiting_for"),
+                    "codes": st.session_state.get("codes", []),
+                    "selected_codes": st.session_state.get("selected_codes", [])
                 }
                 
                 # Process through agent
@@ -778,6 +781,14 @@ def process_query_conversational(query: str):
                     st.session_state.cohort_count = result_state["cohort_count"]
                 if result_state.get("genie_conversation_id"):
                     st.session_state.genie_conversation_id = result_state["genie_conversation_id"]
+                if result_state.get("waiting_for"):
+                    st.session_state.waiting_for = result_state["waiting_for"]
+                if result_state.get("counts"):
+                    st.session_state.counts = result_state["counts"]
+                if result_state.get("codes"):
+                    st.session_state.codes = result_state["codes"]
+                if result_state.get("selected_codes"):
+                    st.session_state.selected_codes = result_state["selected_codes"]
                 
                 # Store agent state for next turn
                 st.session_state.agent_state = result_state
@@ -794,17 +805,72 @@ def process_query_conversational(query: str):
                 # Build conversational response based on what happened
                 response_parts = []
                 current_step = result_state.get("current_step", "")
+                waiting_for = result_state.get("waiting_for")
                 
-                if current_step == "new_cohort":
+                # Check if we're waiting for code selection
+                if waiting_for == "code_selection":
                     # Show what I understood
                     diagnosis_phrases = result_state.get("diagnosis_phrases", [])
                     if diagnosis_phrases:
-                        response_parts.append(f"I understood you're looking for: {', '.join(diagnosis_phrases)}")
+                        response_parts.append(f"I understood you're looking for: **{', '.join(diagnosis_phrases)}**")
                     
                     # Show codes found
                     codes = result_state.get("codes", [])
                     if codes:
-                        response_parts.append(f"I found {len(codes)} relevant clinical codes.")
+                        response_parts.append(f"I found **{len(codes)} relevant clinical codes**.")
+                        
+                        # Show codes in expandable section
+                        msg_idx = len(st.session_state.messages)
+                        with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False, key=f"new_codes_expander_{msg_idx}"):
+                            code_df = pd.DataFrame(codes)
+                            display_cols = ['code', 'description', 'vocabulary']
+                            available_cols = [col for col in display_cols if col in code_df.columns]
+                            if available_cols:
+                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                        
+                        # Ask about code selection conversationally
+                        response_parts.append("\n\n**Would you like to use all codes, select specific codes, or exclude certain conditions?**")
+                        response_text = "\n".join(response_parts)
+                
+                # Check if we're waiting for analysis decision
+                elif waiting_for == "analysis_decision":
+                    # Show counts
+                    counts = result_state.get("counts", {})
+                    patients = counts.get("patients", 0)
+                    visits = counts.get("visits", 0)
+                    sites = counts.get("sites", 0)
+                    
+                    if patients > 0:
+                        count_text = f"✅ Found **{patients:,} patients**"
+                        if visits > 0:
+                            count_text += f" across **{visits:,} visits**"
+                        if sites > 0:
+                            count_text += f" at **{sites} sites**"
+                        response_parts.append(count_text)
+                    else:
+                        response_parts.append("✅ Generated SQL query. Ready to execute.")
+                    
+                    # Show SQL if available
+                    sql = result_state.get("sql")
+                    if sql:
+                        msg_idx = len(st.session_state.messages)
+                        with st.expander("📝 View Generated SQL", expanded=False, key=f"new_sql_expander_{msg_idx}"):
+                            st.code(sql, language="sql")
+                    
+                    # Ask about analysis conversationally
+                    response_parts.append("\n\n**Would you like to explore this cohort further, or would you like to adjust your criteria?**")
+                    response_text = "\n".join(response_parts)
+                
+                elif current_step == "new_cohort":
+                    # Show what I understood
+                    diagnosis_phrases = result_state.get("diagnosis_phrases", [])
+                    if diagnosis_phrases:
+                        response_parts.append(f"I understood you're looking for: **{', '.join(diagnosis_phrases)}**")
+                    
+                    # Show codes found
+                    codes = result_state.get("codes", [])
+                    if codes:
+                        response_parts.append(f"I found **{len(codes)} relevant clinical codes**.")
                         
                         # Show codes in expandable section
                         msg_idx = len(st.session_state.messages)
@@ -822,10 +888,8 @@ def process_query_conversational(query: str):
                         with st.expander("🧠 How I'm enriching your request for Genie", expanded=False, key=f"genie_prompt_expander_{msg_idx}"):
                             st.markdown(genie_prompt)
                     
-                    # Show SQL if generated, or show status if still processing
+                    # Show SQL if generated
                     sql = result_state.get("sql")
-                    genie_conversation_id = result_state.get("genie_conversation_id")
-                    
                     if sql:
                         response_parts.append("I've generated a SQL query to find matching patients.")
                         msg_idx = len(st.session_state.messages)
@@ -834,19 +898,10 @@ def process_query_conversational(query: str):
                         
                         # Offer to execute
                         if not result_state.get("cohort_table"):
-                            # Use unique key based on session_id and timestamp to avoid duplicate widget errors
                             button_key = f"execute_cohort_{st.session_state.session_id}_{len(st.session_state.messages)}"
                             if st.button("🚀 Execute Query & Create Cohort", key=button_key):
                                 execute_and_materialize_cohort(result_state)
                                 st.rerun()
-                    elif genie_conversation_id:
-                        # Genie is still processing - offer to check status
-                        response_parts.append("I've started generating SQL with Genie. This may take a moment...")
-                        msg_idx = len(st.session_state.messages)
-                        button_key = f"check_genie_status_{st.session_state.session_id}_{len(st.session_state.messages)}"
-                        if st.button("🔄 Check Genie Status", key=button_key):
-                            check_genie_status(genie_conversation_id)
-                            st.rerun()
                     
                     # Show cohort count if available
                     count = result_state.get("cohort_count", 0)
@@ -854,7 +909,7 @@ def process_query_conversational(query: str):
                         response_parts.append(f"✅ Found **{count:,} patients** matching your criteria!")
                     
                     # Build final response
-                    response_text = " ".join(response_parts) if response_parts else "I've processed your request. Review the details above."
+                    response_text = "\n".join(response_parts) if response_parts else "I've processed your request. Review the details above."
                     
                 elif current_step in ["follow_up", "insights"]:
                     # Handle follow-up questions
