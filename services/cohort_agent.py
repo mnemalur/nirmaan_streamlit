@@ -29,6 +29,7 @@ class AgentState(TypedDict, total=False):
     session_id: str
     sql: str
     answer_data: dict
+    reasoning_steps: list  # List of (step_name, description) tuples for transparency
 
 
 class CohortAgent:
@@ -72,12 +73,13 @@ class CohortAgent:
         
         # Flow for new cohort creation
         # LLM first interprets intent, then we search codes, then build the
-        # enriched Genie request. For now, we stop after generate_sql so
-        # users can review everything before executing SQL.
+        # enriched Genie request, generate SQL, and optionally materialize cohort
         workflow.add_edge("interpret_intent", "search_codes")
         workflow.add_edge("search_codes", "generate_sql")
+        # For conversational flow, we generate SQL but don't auto-materialize
+        # User can request materialization explicitly
         workflow.add_edge("generate_sql", END)
-        # Later, when enabling full flow:
+        # Full auto-flow (commented for now - user controls execution):
         # workflow.add_edge("generate_sql", "materialize_cohort")
         # workflow.add_edge("materialize_cohort", END)
         
@@ -132,22 +134,35 @@ class CohortAgent:
         if not query:
             return state
 
+        # Track reasoning
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Interpret Intent", f"Analyzing your query to extract key clinical concepts..."))
+        state["reasoning_steps"] = reasoning
+
         # If an intent service is wired, use it. Otherwise, fall back to the
         # raw query as a single phrase.
         try:
             if self.intent_service:
                 phrases = self.intent_service.extract_diagnosis_phrases(query)
+                reasoning.append(("Extract Phrases", f"Found {len(phrases)} key phrase(s): {', '.join(phrases[:3])}"))
             else:
                 phrases = [query]
+                reasoning.append(("Extract Phrases", "Using full query as search phrase"))
         except Exception as e:
             logger.warning(f"Intent extraction error, using raw query: {e}")
             phrases = [query]
+            reasoning.append(("Extract Phrases", f"Intent extraction had an issue, using full query: {str(e)[:50]}"))
 
         state["diagnosis_phrases"] = phrases
+        state["reasoning_steps"] = reasoning
         return state
     
     def _search_codes(self, state: AgentState) -> AgentState:
         """Search for relevant codes using vector search"""
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Vector Search", "Searching for standard clinical codes (ICD, SNOMED, etc.)..."))
+        state["reasoning_steps"] = reasoning
+        
         try:
             # Prefer diagnosis phrases extracted by the LLM; fall back to the
             # full user query if we don't have any.
@@ -164,6 +179,7 @@ class CohortAgent:
                     {c.get("vocabulary") for c in codes if c.get("vocabulary")}
                 )
                 state["vocabularies"] = vocabularies
+                reasoning.append(("Code Search Results", f"Found {len(codes)} codes across {len(vocabularies)} vocabulary system(s): {', '.join(vocabularies)}"))
             if not codes:
                 # No codes from vector search – don't hard fail. We'll fall back
                 # to using only the original user query when building the Genie
@@ -172,16 +188,24 @@ class CohortAgent:
                     "Vector search returned no codes; will fall back to Genie with "
                     "original query only."
                 )
+                reasoning.append(("Code Search Results", "No codes found via vector search. Will use natural language query directly with Genie."))
             
+            state["reasoning_steps"] = reasoning
             return state
         except Exception as e:
             logger.error(f"Error in search_codes: {str(e)}")
             state["error"] = f"Error searching for codes: {str(e)}"
             state["current_step"] = "error"
+            reasoning.append(("Code Search Error", f"Error occurred: {str(e)[:100]}"))
+            state["reasoning_steps"] = reasoning
             return state
     
     def _generate_sql(self, state: AgentState) -> AgentState:
         """Generate SQL query using Genie"""
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Generate SQL", "Building enriched request for Genie with codes and criteria..."))
+        state["reasoning_steps"] = reasoning
+        
         try:
             codes = state.get("codes", [])
             # If no codes came back from vector search, fall back to using only
@@ -227,12 +251,17 @@ class CohortAgent:
             
             result = self.genie_service.create_cohort_query(criteria)
 
-            # In preview mode, we only care about the constructed Genie prompt.
-            # SQL and conversation_id will be None until we enable the full flow.
+            # Get the Genie response
             state["genie_prompt"] = result.get("prompt")
             state["genie_conversation_id"] = result.get('conversation_id')
             state["sql"] = result.get('sql')
             
+            if state["sql"]:
+                reasoning.append(("SQL Generated", f"Genie generated SQL query ({len(state['sql'])} characters)"))
+            else:
+                reasoning.append(("SQL Generated", "Genie prompt created, SQL generation pending"))
+            
+            state["reasoning_steps"] = reasoning
             return state
         except Exception as e:
             logger.error(f"Error in generate_sql: {str(e)}")
@@ -341,7 +370,8 @@ class CohortAgent:
             "cohort_count": existing_state.get("cohort_count") if existing_state else 0,
             "genie_conversation_id": existing_state.get("genie_conversation_id") if existing_state else None,
             "current_step": "",
-            "error": None
+            "error": None,
+            "reasoning_steps": []
         }
         
         # Run the graph

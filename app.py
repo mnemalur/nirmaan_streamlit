@@ -652,13 +652,13 @@ def render_config_page():
 
 
 def render_chat_page():
-    """Main chat interface"""
+    """Main conversational chat interface using LangGraph agent"""
     # Compact header
     col_header1, col_header2 = st.columns([3, 1])
     with col_header1:
         st.title("🏥 Clinical Cohort Assistant")
     with col_header2:
-        st.caption("Build patient cohorts using natural language queries")
+        st.caption("Conversational cohort builder")
     
     # Check if services are initialized
     if not st.session_state.services_initialized:
@@ -683,543 +683,63 @@ def render_chat_page():
         st.warning("⚠️ Please configure Databricks connection in the sidebar first.")
         return
 
-    # Criteria understanding (Milestone 1) – lightweight analysis before the full agent flow
-    # Only expand if no analysis exists yet
-    has_analysis = st.session_state.get("criteria_analysis") is not None
-    with st.expander("🧩 Step 1: Enter & Analyze Clinical Criteria", expanded=not has_analysis):
-        st.caption(
-            "I’ll read your draft criteria, summarize how I understand it, "
-            "highlight key clinical concepts, and call out anything that seems ambiguous "
-            "before moving on to look up standard diagnosis and drug codes."
-        )
-        with st.form("criteria_analysis_form"):
-            criteria_text = st.text_area(
-                "Describe your clinical criteria in natural language",
-                value="",
-                placeholder="e.g., Adults 50–80 with at least two encounters for heart failure in the last 3 years, currently on beta-blockers.",
-                height=120,
+    # Ensure cohort_agent is initialized
+    if 'cohort_agent' not in st.session_state or st.session_state.cohort_agent is None:
+        try:
+            from services.cohort_agent import CohortAgent
+            st.session_state.cohort_agent = CohortAgent(
+                vector_service=st.session_state.vector_service,
+                genie_service=st.session_state.genie_service,
+                cohort_manager=st.session_state.cohort_manager,
+                intent_service=st.session_state.intent_service
             )
-            analyze_submitted = st.form_submit_button("Analyze criteria", use_container_width=True)
+        except Exception as e:
+            st.error(f"Failed to initialize cohort agent: {str(e)}")
+            logger.error(f"Agent initialization error: {e}", exc_info=True)
+            return
 
-        if analyze_submitted and criteria_text:
-            if not hasattr(st.session_state, "intent_service") or st.session_state.intent_service is None:
-                st.error("Intent service is not initialized. Please check configuration.")
-            else:
-                with st.spinner("Analyzing criteria..."):
-                    analysis = st.session_state.intent_service.analyze_criteria(criteria_text)
-                    st.session_state.criteria_analysis = analysis
-                    st.session_state.criteria_text = criteria_text
-
-        analysis = st.session_state.get("criteria_analysis")
-        if analysis:
-            st.subheader("How I understand your criteria")
-            st.write(analysis.get("summary", ""))
-
-            # Only show concept groups that actually have content, so it doesn't
-            # feel like you're being told something is “missing” when you never
-            # specified it.
-            col1, col2 = st.columns(2)
-            with col1:
-                conditions = analysis.get("conditions") or []
-                if conditions:
-                    st.markdown("**Conditions**")
-                    st.write(", ".join(conditions))
-
-                drugs = analysis.get("drugs") or []
-                if drugs:
-                    st.markdown("**Drugs**")
-                    st.write(", ".join(drugs))
-
-                procedures = analysis.get("procedures") or []
-                if procedures:
-                    st.markdown("**Procedures**")
-                    st.write(", ".join(procedures))
-
-            with col2:
-                demographics = analysis.get("demographics") or []
-                if demographics:
-                    st.markdown("**Demographics**")
-                    st.write(", ".join(demographics))
-
-                timeframe = analysis.get("timeframe") or ""
-                if timeframe:
-                    st.markdown("**Timeframe**")
-                    st.write(timeframe)
-
-            ambiguities = analysis.get("ambiguities", [])
-            st.markdown("**Ambiguities / things to clarify**")
-            if ambiguities:
-                st.info(
-                    f"I see {len(ambiguities)} point(s) that could affect how I match this "
-                    "to patients. You can refine the text above and re-run the analysis, or "
-                    "click **Continue with this criteria and search for codes** below and "
-                    "I’ll still try to find the best matching codes based on what you wrote."
-                )
-                for a in ambiguities:
-                    st.markdown(f"- {a}")
-            else:
-                st.success(
-                    "I don’t see major ambiguities. This looks specific enough to start "
-                    "mapping to standard codes in the next step. You can tweak the text above "
-                    "or go ahead and click **Continue with this criteria and search for codes**."
-                )
-
-            # Let the user move from understanding → action in one click
-            if st.button("Continue with this criteria and search for codes", use_container_width=True):
-                criteria_text_for_codes = st.session_state.get("criteria_text") or ""
-                search_codes_for_criteria(criteria_text_for_codes)
-
-    # Step 2: Code Selection - Only show if we have codes or errors
-    has_codes = len(st.session_state.get("codes", [])) > 0
-    has_code_error = bool(st.session_state.code_search_error)
-    
-    if has_codes or has_code_error or st.session_state.code_search_text:
-        # Only expand if we're actively working on code selection
-        has_selected = len(st.session_state.get("selected_codes", [])) > 0
-        with st.expander("🔍 Step 2: Select Codes", expanded=(has_codes and not has_selected)):
-            if st.session_state.code_search_text:
-                st.caption(f"**Searched for:** {st.session_state.code_search_text}")
+    # Display chat history
+    for idx, message in enumerate(st.session_state.messages):
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
             
-            if st.session_state.code_search_error:
-                st.error(st.session_state.code_search_error)
-            elif st.session_state.codes:
-                codes = st.session_state.codes
-                
-                # Group codes by condition phrase
-                grouped: dict[str, list[dict]] = {}
-                for c in codes:
-                    cond = c.get("condition") or "Unspecified condition"
-                    grouped.setdefault(cond, []).append(c)
-
-                # Compact summary
-                st.caption(f"Found {len(codes)} code(s) across {len(grouped)} condition(s)")
-                for cond, cond_codes in grouped.items():
-                    st.caption(f"• **{cond}**: {len(cond_codes)} code(s)")
-
-                overall_choice = st.radio(
-                    "Code selection method",
-                    ["Use all suggested codes (recommended)", "Customize codes per condition"],
-                    index=0,
-                    horizontal=True,
-                    key="code_selection_choice",
-                    label_visibility="collapsed",
-                )
-
-                selected_codes: list[dict] = []
-
-                if overall_choice.startswith("Use all"):
-                    if not grouped:
-                        st.warning("No codes were found to select.")
-                    else:
-                        for cond_codes in grouped.values():
-                            if cond_codes:
-                                selected_codes.extend(cond_codes)
-                        if selected_codes:
-                            st.session_state.selected_codes = selected_codes
-                            logger.info(f"Selected {len(selected_codes)} codes via 'Use all'")
-                else:
-                    # Customize mode - show code selection with proper DataFrame display
-                    for idx, (cond, cond_codes) in enumerate(grouped.items()):
-                        st.markdown(f"### 📋 {cond} ({len(cond_codes)} codes)")
-                        
-                        # Create DataFrame with proper column handling
-                        normalized_codes = []
-                        try:
-                            # Normalize code dictionaries to ensure consistent columns
-                            for c in cond_codes:
-                                if isinstance(c, dict):
-                                    normalized = {
-                                        'code': str(c.get('code') or c.get('concept_code') or c.get('source_code') or 'N/A'),
-                                        'description': str(c.get('description') or c.get('concept_name') or 'No description'),
-                                        'vocabulary': str(c.get('vocabulary') or c.get('vocabulary_id') or 'N/A'),
-                                        'confidence': c.get('confidence', '')
-                                    }
-                                    normalized_codes.append(normalized)
-                            
-                            if normalized_codes:
-                                # Import pandas at function level to ensure it's accessible
-                                import pandas as pd
-                                code_df = pd.DataFrame(normalized_codes)
-                                
-                                # Select columns to display (only show non-empty columns)
-                                display_cols = []
-                                for col in ['code', 'description', 'vocabulary', 'confidence']:
-                                    if col in code_df.columns and not code_df[col].isna().all():
-                                        display_cols.append(col)
-                                
-                                if display_cols and not code_df.empty:
-                                    # Format confidence as percentage if it's numeric
-                                    if 'confidence' in display_cols:
-                                        try:
-                                            code_df['confidence'] = code_df['confidence'].apply(
-                                                lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) and x != '' else str(x)
-                                            )
-                                        except:
-                                            pass
-                                    
-                                    # Display DataFrame with proper formatting
-                                    st.dataframe(
-                                        code_df[display_cols], 
-                                        use_container_width=True, 
-                                        hide_index=True,
-                                        height=min(300, len(code_df) * 35 + 40)  # Dynamic height
-                                    )
-                                else:
-                                    # Fallback: show raw data if DataFrame creation fails
-                                    st.warning("Could not format codes as table. Showing raw data.")
-                                    st.json(cond_codes)
-                            else:
-                                st.warning("No valid code data found.")
-                                st.json(cond_codes)
-                        except Exception as e:
-                            logger.error(f"Error displaying codes DataFrame: {e}", exc_info=True)
-                            st.warning(f"Could not display codes as table: {str(e)}")
-                            # Try to show as table even if there was an error
-                            if normalized_codes:
-                                try:
-                                    import pandas as pd
-                                    st.dataframe(pd.DataFrame(normalized_codes), use_container_width=True, hide_index=True)
-                                except:
-                                    st.json(cond_codes)
-                            else:
-                                st.json(cond_codes)
-
-                        # Create selection options from codes (use normalized data if available)
-                        label_to_code = {}
-                        codes_to_use = normalized_codes if 'normalized_codes' in locals() else cond_codes
-                        for c in codes_to_use:
-                            if isinstance(c, dict):
-                                code_val = c.get('code', 'N/A')
-                                desc = c.get('description', 'No description')
-                                vocab = c.get('vocabulary', 'N/A')
-                                label = f"{code_val} – {desc} ({vocab})"
-                                # Store original code dict for later use
-                                label_to_code[label] = c if c in cond_codes else next(
-                                    (orig for orig in cond_codes if orig.get('code') == code_val), c
-                                )
-                        
-                        options = list(label_to_code.keys())
-
-                        if options:
-                            selected_labels = st.multiselect(
-                                f"Select codes for {cond}:",
-                                options=options,
-                                key=f"codes_select_{idx}",
-                                help=f"Select one or more codes from the {len(cond_codes)} codes found for this condition"
-                            )
-
-                            for label in selected_labels:
-                                if label in label_to_code:
-                                    selected_codes.append(label_to_code[label])
-                        else:
-                            st.warning("No valid codes found for selection.")
-                        
-                        if idx < len(grouped) - 1:
-                            st.markdown("---")  # Separator between conditions
-
-                # Always update session state
-                st.session_state.selected_codes = selected_codes
-                final_selected = st.session_state.get("selected_codes") or selected_codes
-                
-                if final_selected and len(final_selected) > 0:
-                    st.success(f"✅ {len(final_selected)} code(s) selected")
-                    if st.button("➡️ Refine Criteria with Selected Codes", use_container_width=True, type="primary"):
-                        refined_text = refine_criteria_with_codes()
-                        if refined_text:
-                            st.rerun()
-                elif not codes or len(codes) == 0:
-                    st.warning("No codes were found from the vector search.")
-                else:
-                    st.warning("Please select codes above to continue.")
-
-    # Step 3: Refined Criteria & Genie
-    refined_text = st.session_state.get("refined_criteria_text")
-    has_genie_result = st.session_state.get("genie_result") is not None
-    has_genie_running = st.session_state.get("genie_running", False)
-    
-    if refined_text:
-        with st.expander("✨ Step 3: Refined Criteria & Query", expanded=(not has_genie_result)):
-            st.markdown("**Refined criteria:**")
-            st.write(refined_text)
-            
-            if st.session_state.get("genie_running"):
-                # Actually call Genie now (this will poll and take time)
-                with st.spinner("⏳ Genie is processing... This may take up to 5 minutes. Please wait..."):
-                    run_genie_for_refined_criteria()
-                    st.session_state.genie_running = False
-                    st.rerun()
-            elif st.session_state.get("genie_error"):
-                st.error(f"❌ {st.session_state.genie_error}")
-                st.session_state.genie_running = False
-            elif not st.session_state.get("genie_result"):
-                if st.button("🚀 Ask Genie to Find Patients", use_container_width=True, type="primary"):
-                    st.session_state.genie_running = True
-                    st.rerun()
-
-    # Step 4: Genie Results
-    genie_result = st.session_state.get("genie_result")
-    if genie_result:
-        sql = genie_result.get("sql")
-        data = genie_result.get("data", [])
-        row_count = genie_result.get("row_count", 0)
-        exec_time = genie_result.get("execution_time")
-
-        # Step 4: Show results in tabs
-        st.markdown("### 📊 Step 4: Query Results")
-        
-        # Show execution time if available
-        if exec_time is not None:
-            st.caption(f"⏱️ Execution time: {exec_time}")
-        
-        # Use tabs for Data Table and SQL
-        result_tabs = st.tabs(["📋 Data Table", "📝 View SQL"])
-        
-        # Tab 1: Data Table
-        with result_tabs[0]:
-            # Display the actual data if available (limit to 5000 rows max)
-            MAX_DISPLAY_ROWS = 5000
-            
-            # Show row count info at top (blue info band for clarity)
-            if row_count is not None and row_count > 0:
-                if data and len(data) > 0:
-                    if len(data) < row_count:
-                        st.info(f"📊 **{row_count:,} total rows** | Showing {len(data):,} rows (max {MAX_DISPLAY_ROWS:,})")
-                    elif len(data) >= MAX_DISPLAY_ROWS:
-                        st.info(f"📊 **{row_count:,} total rows** | Showing first {MAX_DISPLAY_ROWS:,} rows (limited for performance)")
-                    else:
-                        st.info(f"📊 **{row_count:,} rows** (showing all available data)")
-                else:
-                    st.info(f"📊 **{row_count:,} total rows** (data may be truncated)")
-            elif data and len(data) > 0:
-                if len(data) >= MAX_DISPLAY_ROWS:
-                    st.info(f"📊 Showing first {MAX_DISPLAY_ROWS:,} of {len(data):,} rows (limited for performance)")
-                else:
-                    st.info(f"📊 **{len(data):,} rows** (showing all available data)")
-            elif row_count == 0:
-                st.info("📊 **0 rows** - No patients match this criteria")
-            
-            if data and len(data) > 0:
-                try:
-                    # Convert data to DataFrame for better display
-                    import pandas as pd
-                    # Get column names from genie_result if available
-                    columns = genie_result.get("columns")
-                    logger.info(f"🔍 DEBUG: columns from genie_result: {columns}, type: {type(columns)}, length: {len(columns) if columns else 0}")
-                    logger.info(f"🔍 DEBUG: genie_result keys: {list(genie_result.keys())}")
+            # Show additional data if available (codes, SQL, etc.)
+            if "data" in message:
+                data = message["data"]
+                if isinstance(data, dict):
+                    # Show codes if available
+                    if "codes" in data and data["codes"]:
+                        with st.expander("📋 Found Codes", expanded=False, key=f"codes_expander_{idx}"):
+                            code_df = pd.DataFrame(data["codes"])
+                            display_cols = ['code', 'description', 'vocabulary']
+                            available_cols = [col for col in display_cols if col in code_df.columns]
+                            if available_cols:
+                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                     
-                    # Check data structure
-                    if data and len(data) > 0:
-                        first_row = data[0]
-                        is_list_of_dicts = isinstance(first_row, dict)
-                        is_list_of_lists = isinstance(first_row, (list, tuple))
-                        logger.info(f"🔍 DEBUG: first_row type: {type(first_row)}, is_list_of_dicts: {is_list_of_dicts}, is_list_of_lists: {is_list_of_lists}")
-                        
-                        if columns and len(columns) > 0:
-                            logger.info(f"✅ Using extracted columns: {columns} (count: {len(columns)})")
-                            logger.info(f"🔍 DEBUG: Data sample - first row length: {len(first_row) if hasattr(first_row, '__len__') else 'N/A'}, first row: {str(first_row)[:100]}")
-                            
-                            # Use provided column names
-                            if is_list_of_lists:
-                                # Data is list of lists, use columns parameter
-                                logger.info(f"🔍 DEBUG: Creating DataFrame from list of lists with {len(columns)} column names")
-                                logger.info(f"🔍 DEBUG: First row has {len(first_row)} values, columns list has {len(columns)} names")
-                                if len(first_row) != len(columns):
-                                    logger.warning(f"⚠️ MISMATCH: First row has {len(first_row)} values but we have {len(columns)} column names!")
-                                try:
-                                    df = pd.DataFrame(data, columns=columns)
-                                    logger.info(f"✅ DataFrame created successfully with columns parameter")
-                                except Exception as e:
-                                    logger.error(f"❌ Error creating DataFrame with columns: {e}")
-                                    # Fallback: create without columns
-                                    df = pd.DataFrame(data)
-                                    logger.warning(f"⚠️ Fallback: Created DataFrame without column names")
-                            elif is_list_of_dicts:
-                                # Data is list of dicts, but we have column names - use them to reorder/select
-                                logger.info(f"🔍 DEBUG: Creating DataFrame from list of dicts")
-                                df = pd.DataFrame(data)
-                                logger.info(f"🔍 DEBUG: DataFrame from dicts has columns: {list(df.columns)}")
-                                # If column names match dict keys, reorder; otherwise use provided columns
-                                if set(columns).issubset(set(df.columns)):
-                                    logger.info(f"✅ Column names match dict keys, reordering...")
-                                    df = df[columns]
-                                else:
-                                    logger.warning(f"⚠️ Column names don't match dict keys. Dict keys: {list(df.columns)}, Provided columns: {columns}")
-                                    # Try to create with provided columns (may fail if mismatch)
-                                    try:
-                                        df = pd.DataFrame(data, columns=columns)
-                                        logger.info(f"✅ Created DataFrame with provided columns despite mismatch")
-                                    except Exception as e:
-                                        logger.error(f"❌ Error: {e}, keeping original DataFrame")
-                            else:
-                                logger.info(f"🔍 DEBUG: Unknown data structure, trying to create with columns anyway")
-                                try:
-                                    df = pd.DataFrame(data, columns=columns)
-                                except Exception as e:
-                                    logger.error(f"❌ Error: {e}")
-                                    df = pd.DataFrame(data)
-                            
-                            logger.info(f"✅ Created DataFrame with {len(columns)} columns: {columns[:5]}..." if len(columns) > 5 else f"✅ Created DataFrame with columns: {columns}")
-                            logger.info(f"🔍 DEBUG: DataFrame.columns after creation: {list(df.columns)}")
-                            logger.info(f"🔍 DEBUG: DataFrame.shape: {df.shape}")
-                            logger.info(f"🔍 DEBUG: Column names match? Expected: {columns}, Got: {list(df.columns)}")
-                        else:
-                            # No column names provided - try to infer from data structure
-                            if is_list_of_dicts:
-                                # List of dicts - pandas will use dict keys as column names
-                                df = pd.DataFrame(data)
-                                logger.info(f"Created DataFrame from list of dicts with columns: {list(df.columns)}")
-                            elif is_list_of_lists:
-                                # List of lists - will get numeric indices, which is the problem
-                                df = pd.DataFrame(data)
-                                logger.warning(f"DataFrame created with numeric column indices (0, 1, 2...). Column names not available from Genie. Data shape: {df.shape}")
-                                st.warning("⚠️ Column names not available. Showing numeric indices. This may indicate an issue with Genie response parsing.")
-                            else:
-                                df = pd.DataFrame(data)
-                                logger.warning(f"Unknown data structure type: {type(first_row)}. Created DataFrame with columns: {list(df.columns)}")
+                    # Show SQL if available
+                    if "sql" in data and data["sql"]:
+                        with st.expander("📝 Generated SQL", expanded=False, key=f"sql_expander_{idx}"):
+                            st.code(data["sql"], language="sql")
                     
-                    # Limit to max 5000 rows for display
-                    total_rows = len(df)
-                    display_df = df.head(MAX_DISPLAY_ROWS)
-                    
-                    # Log before display to verify columns are still correct
-                    logger.info(f"🔍 DEBUG: display_df.columns before st.dataframe: {list(display_df.columns)}")
-                    logger.info(f"🔍 DEBUG: Are columns still named (not numeric)? {all(not str(col).isdigit() for col in display_df.columns) if len(display_df.columns) > 0 else 'N/A'}")
-                    
-                    # Show row count info (compact caption, no blue band)
-                    if total_rows > MAX_DISPLAY_ROWS:
-                        st.caption(f"Showing first {MAX_DISPLAY_ROWS:,} of {total_rows:,} rows (limited for performance)")
-                    elif row_count and row_count > total_rows:
-                        st.caption(f"Showing {total_rows:,} of {row_count:,} rows (data may be truncated)")
-                    elif row_count:
-                        st.caption(f"Total rows: {row_count:,}")
-                    
-                    # Display the data (already limited to MAX_DISPLAY_ROWS)
-                    st.dataframe(display_df, use_container_width=True, hide_index=True)
-                    
-                    # Log after display (though this won't help if st.dataframe modifies it)
-                    logger.info(f"🔍 DEBUG: DataFrame columns after st.dataframe call (should be unchanged): {list(display_df.columns)}")
-                    
-                    # Store display_df for summary statistics (outside expander to avoid nesting)
-                    st.session_state._last_display_df = display_df
-                except Exception as e:
-                    # If DataFrame conversion fails, show raw data (but still limit)
-                    logger.warning(f"Could not convert Genie data to DataFrame: {e}")
-                    limited_data = data[:MAX_DISPLAY_ROWS] if len(data) > MAX_DISPLAY_ROWS else data
-                    if len(data) > MAX_DISPLAY_ROWS:
-                        st.info(f"Showing first {MAX_DISPLAY_ROWS:,} of {len(data):,} rows.")
-                    st.json(limited_data)
-            elif row_count and row_count > 0:
-                # We have a row count but no data array (data might be truncated or not extracted)
-                st.warning(
-                    f"Genie reported {row_count:,} row(s) were returned, but the data array is not available. "
-                    f"This may be because:\n"
-                    f"- The result set is very large and was truncated\n"
-                    f"- Data extraction encountered an issue\n\n"
-                    f"You can use the generated SQL in the 'View SQL' tab to query the full dataset directly."
-                )
-        
-        # Tab 2: View SQL
-        with result_tabs[1]:
-            if sql:
-                st.code(sql, language="sql")
-            else:
-                st.info("No SQL query available")
-        
-        # Show summary statistics (outside tabs)
-        if hasattr(st.session_state, '_last_display_df'):
-            display_df = st.session_state._last_display_df
-            numeric_cols = display_df.select_dtypes(include=['number']).columns
-            if len(numeric_cols) > 0:
-                with st.expander("📈 Summary Statistics", expanded=False):
-                    st.dataframe(display_df[numeric_cols].describe(), use_container_width=True)
-    
-    # Step 5: Dimension Analysis (consistent with Steps 1-4: use expander that collapses)
-    cohort_table_info = st.session_state.get("cohort_table_info")
-    dimension_results = st.session_state.get("dimension_results")
-    dimension_analyzing = st.session_state.get("dimension_analyzing", False)
-    cohort_table_creating = st.session_state.get("cohort_table_creating", False)
-    cohort_table_error = st.session_state.get("cohort_table_error")
-    
-    # Determine if Step 5 should be expanded (not expanded if dimension_results exist)
-    step5_expanded = not dimension_results
-    
-    if genie_result:
-        with st.expander("📊 Step 5: Cohort Dimension Analysis", expanded=step5_expanded):
-            # Auto-create cohort table if it doesn't exist and we have genie results
-            if not cohort_table_info and not cohort_table_creating and not cohort_table_error and not dimension_results:
-                # Auto-create table in background
-                with st.spinner("Preparing cohort table for dimension analysis..."):
-                    try:
-                        create_cohort_table_from_genie_sql()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Error creating cohort table: {str(e)}")
-                        logger.error(f"Cohort table creation error: {str(e)}", exc_info=True)
-                        st.session_state.cohort_table_error = str(e)
-            
-            # Show status and buttons based on current state
-            if cohort_table_creating:
-                with st.spinner("Creating cohort table... This may take a moment."):
-                    pass  # Will rerun automatically
-            
-            elif cohort_table_error:
-                st.error(f"❌ {cohort_table_error}")
-                if st.button("🔄 Retry Creating Cohort Table", use_container_width=True):
-                    st.session_state.cohort_table_error = None
-                    st.session_state.cohort_table_creating = True
-                    st.rerun()
-            
-            elif dimension_analyzing:
-                with st.spinner("Analyzing cohort dimensions... This may take a minute."):
-                    # Execute dimension analysis
-                    if cohort_table_info:
-                        try:
-                            cohort_table = cohort_table_info.get('cohort_table')
-                            has_medrec = cohort_table_info.get('has_medrec_key', False)
-                            
-                            if cohort_table and hasattr(st.session_state, 'dimension_service'):
-                                # Use dynamic mode: schema discovery + LLM-generated SQL (parallel)
-                                results = st.session_state.dimension_service.analyze_dimensions(
-                                    cohort_table=cohort_table,
-                                    has_medrec_key=has_medrec,
-                                    use_dynamic=True  # Enable dynamic schema-based generation
-                                )
-                                st.session_state.dimension_results = results
-                                st.session_state.dimension_analyzing = False
-                                st.rerun()
-                            else:
-                                st.error("Cannot analyze dimensions: cohort table information missing")
-                                st.session_state.dimension_analyzing = False
-                        except Exception as e:
-                            st.error(f"Error analyzing dimensions: {str(e)}")
-                            logger.error(f"Dimension analysis error: {str(e)}", exc_info=True)
-                            st.session_state.dimension_analyzing = False
-            
-            elif cohort_table_info:
-                # Table created, ready for analysis
-                st.success(f"✅ Ready for dimension analysis ({cohort_table_info['count']:,} patients)")
-                if st.button("📊 Analyze Cohort Dimensions", use_container_width=True, type="primary"):
-                    st.session_state.dimension_analyzing = True
-                    st.rerun()
-    
-    # Show dimension results OUTSIDE the expander (so they're always visible after analysis)
-    if dimension_results:
-        st.markdown("---")
-        # Show dimension analysis results in compact grid layout
-        display_dimension_results_compact(dimension_results)
+                    # Show count if available
+                    if "count" in data:
+                        st.info(f"📊 Found {data['count']:,} patients")
+
+    # Chat input
+    if prompt := st.chat_input("Describe your clinical criteria or ask a question..."):
+        # Process the query through the LangGraph agent
+        process_query_conversational(prompt)
+        st.rerun()
 
 
-def process_query(query: str):
-    """Process user query using LangGraph agent"""
+def process_query_conversational(query: str):
+    """Process user query using LangGraph agent with conversational flow and reasoning traces"""
     # Add user message
     st.session_state.messages.append({"role": "user", "content": query})
     
-    with st.chat_message("user"):
-        st.markdown(query)
-    
     # Process query through LangGraph agent
     with st.chat_message("assistant"):
-        with st.spinner("Processing query..."):
+        with st.spinner("🤔 Thinking..."):
             try:
                 # Get existing state for context
                 existing_state = {
@@ -1235,6 +755,14 @@ def process_query(query: str):
                     existing_state
                 )
                 
+                # Display reasoning steps if available (after spinner completes)
+                reasoning_steps = result_state.get("reasoning_steps", [])
+                if reasoning_steps:
+                    msg_idx = len(st.session_state.messages)
+                    with st.expander("🔍 What I'm doing (reasoning steps)", expanded=False, key=f"reasoning_expander_{msg_idx}"):
+                        for step_name, description in reasoning_steps:
+                            st.markdown(f"**{step_name}**: {description}")
+                
                 # Update session state with results
                 if result_state.get("cohort_table"):
                     st.session_state.cohort_table = result_state["cohort_table"]
@@ -1248,102 +776,154 @@ def process_query(query: str):
                 
                 # Handle errors
                 if result_state.get("error"):
-                    st.error(result_state["error"])
+                    st.error(f"❌ {result_state['error']}")
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": result_state["error"]
+                        "content": f"I encountered an error: {result_state['error']}"
                     })
                     return
                 
-                # Display results based on step type
+                # Build conversational response based on what happened
+                response_parts = []
                 current_step = result_state.get("current_step", "")
                 
                 if current_step == "new_cohort":
-                    # Display codes if available
+                    # Show what I understood
+                    diagnosis_phrases = result_state.get("diagnosis_phrases", [])
+                    if diagnosis_phrases:
+                        response_parts.append(f"I understood you're looking for: {', '.join(diagnosis_phrases)}")
+                    
+                    # Show codes found
                     codes = result_state.get("codes", [])
                     if codes:
-                        # Trust-building explanation for the user
-                        st.markdown(
-                            "I've interpreted your request and looked up relevant standard codes "
-                            "across the available vocabularies. Review these codes to see how I'm "
-                            "making your request more precise before sending it on to Genie."
-                        )
-                        st.subheader("📋 Relevant Codes Found")
-                        code_df = pd.DataFrame(codes)
-                        display_cols = ['code', 'description', 'vocabulary', 'confidence']
-                        available_cols = [col for col in display_cols if col in code_df.columns]
-                        st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                        response_parts.append(f"I found {len(codes)} relevant clinical codes.")
+                        
+                        # Show codes in expandable section
+                        msg_idx = len(st.session_state.messages)
+                        with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False, key=f"new_codes_expander_{msg_idx}"):
+                            code_df = pd.DataFrame(codes)
+                            display_cols = ['code', 'description', 'vocabulary']
+                            available_cols = [col for col in display_cols if col in code_df.columns]
+                            if available_cols:
+                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                     
-                    # Show preview of the Genie request (prompt) instead of calling Genie
+                    # Show Genie prompt/enrichment
                     genie_prompt = result_state.get("genie_prompt")
                     if genie_prompt:
-                        st.subheader("🧠 Genie Request Preview (not yet executed)")
-                        st.code(genie_prompt, language="markdown")
-                        st.info("This is the enriched, code-aware request that would be sent to Genie.")
+                        msg_idx = len(st.session_state.messages)
+                        with st.expander("🧠 How I'm enriching your request for Genie", expanded=False, key=f"genie_prompt_expander_{msg_idx}"):
+                            st.markdown(genie_prompt)
                     
-                    # Display SQL if available (will be None in preview mode)
+                    # Show SQL if generated
                     sql = result_state.get("sql")
                     if sql:
-                        st.subheader("📝 Generated SQL")
-                        st.code(sql, language="sql")
+                        response_parts.append("I've generated a SQL query to find matching patients.")
+                        msg_idx = len(st.session_state.messages)
+                        with st.expander("📝 View Generated SQL", expanded=False, key=f"new_sql_expander_{msg_idx}"):
+                            st.code(sql, language="sql")
+                        
+                        # Offer to execute
+                        if not result_state.get("cohort_table"):
+                            # Use unique key based on session_id and timestamp to avoid duplicate widget errors
+                            button_key = f"execute_cohort_{st.session_state.session_id}_{len(st.session_state.messages)}"
+                            if st.button("🚀 Execute Query & Create Cohort", key=button_key):
+                                execute_and_materialize_cohort(result_state)
+                                st.rerun()
                     
-                    # Display cohort results (not used in preview mode)
+                    # Show cohort count if available
                     count = result_state.get("cohort_count", 0)
                     if count > 0:
-                        st.success(f"✅ Found {count} patients")
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": f"Found {count} patients matching your criteria.",
-                            "data": {
-                                "count": count,
-                                "sql": sql,
-                                "codes": codes
-                            }
-                        })
-                
+                        response_parts.append(f"✅ Found **{count:,} patients** matching your criteria!")
+                    
+                    # Build final response
+                    response_text = " ".join(response_parts) if response_parts else "I've processed your request. Review the details above."
+                    
                 elif current_step in ["follow_up", "insights"]:
-                    # Handle follow-up questions and insights
+                    # Handle follow-up questions
                     answer_data = result_state.get("answer_data", {})
                     answer_type = answer_data.get("type")
                     data = answer_data.get("data")
                     
                     if answer_type == "demographics":
-                        st.subheader("👥 Demographics")
+                        response_text = "Here are the demographic characteristics of your cohort:"
                         display_demographics(data)
                     elif answer_type == "sites":
-                        st.subheader("🏥 Site Characteristics")
+                        response_text = "Here are the site characteristics:"
                         display_sites(data)
                     elif answer_type == "trends":
-                        st.subheader("📈 Admission Trends")
+                        response_text = "Here are the admission trends:"
                         display_trends(data)
                     elif answer_type == "outcomes":
-                        st.subheader("📊 Outcomes")
+                        response_text = "Here are the outcomes:"
                         display_outcomes(data)
                     elif answer_type == "count":
-                        st.info(f"📊 The cohort contains {data} patients")
+                        response_text = f"The cohort contains **{data:,} patients**."
                     elif answer_type == "genie":
-                        st.subheader("🤖 Genie Response")
+                        response_text = "Here's what I found:"
                         if data.get("sql"):
-                            st.code(data["sql"], language="sql")
+                            msg_idx = len(st.session_state.messages)
+                            with st.expander("📝 SQL Used", expanded=False, key=f"genie_sql_expander_{msg_idx}"):
+                                st.code(data["sql"], language="sql")
                         if data.get("data"):
                             st.dataframe(pd.DataFrame(data["data"]), use_container_width=True)
-                    
-                    # Add response to messages
-                    response_text = f"Here's the information you requested."
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": response_text,
-                        "data": answer_data
-                    })
+                    else:
+                        response_text = "I've processed your question. See the results above."
+                
+                else:
+                    response_text = "I've processed your request."
+                
+                # Display main response
+                st.markdown(response_text)
+                
+                # Add to message history
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response_text,
+                    "data": {
+                        "codes": result_state.get("codes", []),
+                        "sql": result_state.get("sql"),
+                        "count": result_state.get("cohort_count", 0),
+                        "genie_prompt": result_state.get("genie_prompt")
+                    }
+                })
                 
             except Exception as e:
-                error_msg = f"Error processing query: {str(e)}"
+                error_msg = f"I encountered an error while processing your request: {str(e)}"
                 st.error(error_msg)
-                logger.error(error_msg, exc_info=True)
+                logger.error(f"Error in conversational query processing: {e}", exc_info=True)
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": error_msg
                 })
+
+
+def execute_and_materialize_cohort(result_state: dict):
+    """Execute SQL and materialize cohort table"""
+    sql = result_state.get("sql")
+    if not sql:
+        st.error("No SQL available to execute")
+        return
+    
+    with st.spinner("Executing query and creating cohort table..."):
+        try:
+            # Use cohort_manager to materialize
+            cohort_result = st.session_state.cohort_manager.materialize_cohort(
+                st.session_state.session_id,
+                sql
+            )
+            
+            st.session_state.cohort_table = cohort_result['cohort_table']
+            st.session_state.cohort_count = cohort_result['count']
+            st.session_state.cohort_table_info = {
+                'cohort_table': cohort_result['cohort_table'],
+                'count': cohort_result['count'],
+                'has_medrec_key': cohort_result.get('has_medrec_key', False)
+            }
+            
+            st.success(f"✅ Cohort created: {cohort_result['count']:,} patients")
+        except Exception as e:
+            st.error(f"Error creating cohort: {str(e)}")
+            logger.error(f"Cohort materialization error: {e}", exc_info=True)
 
 
 def display_dimension_results_compact(results: dict):
@@ -2153,47 +1733,39 @@ def main():
             label_visibility="collapsed"
         )
         
-        # Show workflow progress if on Chat page
+        # Show conversational context if on Chat page
         if page == "Chat" and st.session_state.services_initialized:
             st.markdown("---")
-            st.markdown("### Workflow Progress")
+            st.markdown("### Current Context")
             
-            # Determine current step
-            has_analysis = st.session_state.get("criteria_analysis") is not None
-            has_codes = len(st.session_state.get("codes", [])) > 0
-            has_selected_codes = len(st.session_state.get("selected_codes", [])) > 0
-            has_refined = st.session_state.get("refined_criteria_text") != ""
-            has_genie_result = st.session_state.get("genie_result") is not None
+            # Show current cohort if exists
+            cohort_table = st.session_state.get("cohort_table")
+            cohort_count = st.session_state.get("cohort_count", 0)
             
-            steps = [
-                ("1️⃣", "Enter Criteria", has_analysis),
-                ("2️⃣", "Select Codes", has_selected_codes),
-                ("3️⃣", "Refine Criteria", has_refined),
-                ("4️⃣", "View Results", has_genie_result),
-            ]
+            if cohort_table:
+                st.success(f"✅ Active Cohort: {cohort_count:,} patients")
+                st.caption(f"Table: `{cohort_table}`")
+            else:
+                st.info("💬 Start a conversation to build a cohort")
             
-            for icon, label, completed in steps:
-                if completed:
-                    st.markdown(f"{icon} ✅ **{label}**")
-                else:
-                    st.markdown(f"{icon} ⏳ {label}")
+            # Show message count
+            msg_count = len(st.session_state.get("messages", []))
+            if msg_count > 0:
+                st.caption(f"💬 {msg_count} message(s) in conversation")
             
             # Quick actions in sidebar
             st.markdown("---")
             st.markdown("### Quick Actions")
-            if st.button("🔄 Reset Workflow", use_container_width=True):
-                # Reset all workflow-related session state
+            if st.button("🔄 Clear Conversation", use_container_width=True):
+                # Reset conversational state
+                st.session_state.messages = []
+                st.session_state.agent_state = {}
+                st.session_state.cohort_table = None
+                st.session_state.cohort_count = 0
+                st.session_state.genie_conversation_id = None
                 st.session_state.criteria_analysis = None
-                st.session_state.criteria_text = ""
                 st.session_state.codes = []
                 st.session_state.selected_codes = []
-                st.session_state.refined_criteria = None
-                st.session_state.refined_criteria_text = ""
-                st.session_state.code_search_text = ""
-                st.session_state.code_search_error = ""
-                st.session_state.genie_result = None
-                st.session_state.genie_error = None
-                st.session_state.genie_running = False
                 st.rerun()
     
     # Route to appropriate page

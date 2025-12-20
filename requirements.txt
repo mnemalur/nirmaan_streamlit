@@ -1,11 +1,26 @@
+# Core UI Framework (Milestone 0)
 streamlit>=1.28.0
-plotly>=5.17.0
+
+# Data Processing (Milestone 0, 4, 5)
 pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization (Milestone 5)
+plotly>=5.17.0
+
+# Databricks Integration (Milestone 0, 2, 4)
 databricks-sdk>=0.20.0
 databricks-sql-connector>=3.0.0
+databricks-langchain>=0.1.0
+
+# Configuration Management (Milestone 0)
 python-dotenv>=1.0.0
+
+# LangGraph & LangChain (Milestone 1, 6)
 langgraph>=0.0.40
 langchain>=0.1.0
 langchain-core>=0.1.0
-databricks-langchain>=0.1.0
+
+# Additional utilities
+typing-extensions>=4.5.0
 
