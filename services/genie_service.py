@@ -1481,7 +1481,14 @@ class GenieService:
         if demographics:
             lines.append("- Apply the demographic filters listed above (age, sex, setting, etc.).")
         lines.append("- Apply the additional filters where appropriate.")
-        lines.append("- Return a coherent patient cohort result set (one row per patient/encounter as appropriate).")
+        lines.append("")
+        lines.append("IMPORTANT: Instead of returning patient-level data, return aggregated counts:")
+        lines.append("- Return a single row with three columns:")
+        lines.append("  * patient_count: COUNT(DISTINCT patient_id or MEDREC_KEY or PAT_KEY)")
+        lines.append("  * visit_count: COUNT(DISTINCT encounter_id or PAT_KEY - since phd_de_patdemo is the encounter table)")
+        lines.append("  * site_count: COUNT(DISTINCT PROV_ID or PROVIDER_KEY)")
+        lines.append("- The query should SELECT these three counts from the filtered cohort.")
+        lines.append("- Do NOT return individual patient rows - only return the aggregated counts.")
 
         return "\n".join(lines)
 

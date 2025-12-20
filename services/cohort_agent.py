@@ -616,6 +616,7 @@ class CohortAgent:
             state["genie_conversation_id"] = result.get('conversation_id')
             state["sql"] = result.get('sql')
             state["cohort_count"] = result.get('row_count', 0)
+            state["genie_data"] = result.get('data', [])  # Store data returned by Genie
             
             if state["sql"]:
                 reasoning.append(("SQL Generated", f"Genie generated SQL query ({len(state['sql'])} characters)"))
@@ -639,20 +640,100 @@ class CohortAgent:
         
         try:
             sql = state.get("sql")
-            row_count = state.get("cohort_count", 0)
+            genie_data = state.get("genie_data", [])  # Data returned by Genie
             
             if not sql:
                 state["counts"] = {"patients": 0, "visits": 0, "sites": 0}
                 reasoning.append(("Counts", "No SQL available, counts unavailable"))
             else:
-                # For now, use row_count from Genie result
-                # In full implementation, we'd execute separate COUNT queries for visits and sites
-                state["counts"] = {
-                    "patients": row_count,
-                    "visits": 0,  # Would need separate query: COUNT(DISTINCT visit_id)
-                    "sites": 0  # Would need separate query: COUNT(DISTINCT site_id)
-                }
-                reasoning.append(("Counts", f"Found {row_count} patients"))
+                # Check if Genie returned count results (single row with patient_count, visit_count, site_count)
+                if genie_data and len(genie_data) == 1:
+                    row = genie_data[0]
+                    # Check if it's a count result (has count columns)
+                    if isinstance(row, dict):
+                        patient_count = row.get("patient_count") or row.get("patients") or 0
+                        visit_count = row.get("visit_count") or row.get("visits") or row.get("encounter_count") or 0
+                        site_count = row.get("site_count") or row.get("sites") or row.get("provider_count") or 0
+                        
+                        if patient_count > 0 or visit_count > 0 or site_count > 0:
+                            state["counts"] = {
+                                "patients": int(patient_count),
+                                "visits": int(visit_count),
+                                "sites": int(site_count)
+                            }
+                            reasoning.append(("Counts", f"Found {patient_count} patients, {visit_count} visits, {site_count} sites"))
+                        else:
+                            # Fallback to row_count if count columns not found
+                            row_count = state.get("cohort_count", 0)
+                            state["counts"] = {
+                                "patients": row_count,
+                                "visits": 0,
+                                "sites": 0
+                            }
+                            reasoning.append(("Counts", f"Found {row_count} patients (using row count)"))
+                    else:
+                        # Not a dict, use row_count
+                        row_count = state.get("cohort_count", 0)
+                        state["counts"] = {
+                            "patients": row_count,
+                            "visits": 0,
+                            "sites": 0
+                        }
+                        reasoning.append(("Counts", f"Found {row_count} patients (using row count)"))
+                else:
+                    # Genie returned patient-level data - need to calculate distinct counts
+                    # Try to extract distinct counts from the data
+                    row_count = state.get("cohort_count", 0)
+                    
+                    if genie_data and len(genie_data) > 0:
+                        # Try to count distinct patients, visits, sites from the data
+                        try:
+                            patient_ids = set()
+                            visit_ids = set()
+                            site_ids = set()
+                            
+                            for row in genie_data:
+                                if isinstance(row, dict):
+                                    # Try common column names for patient/visit/site identifiers
+                                    patient_id = row.get("patient_id") or row.get("PAT_KEY") or row.get("MEDREC_KEY") or row.get("patient_key")
+                                    visit_id = row.get("visit_id") or row.get("encounter_id") or row.get("PAT_KEY") or row.get("patient_key")
+                                    site_id = row.get("site_id") or row.get("PROV_ID") or row.get("PROVIDER_KEY") or row.get("provider_id")
+                                    
+                                    if patient_id:
+                                        patient_ids.add(str(patient_id))
+                                    if visit_id:
+                                        visit_ids.add(str(visit_id))
+                                    if site_id:
+                                        site_ids.add(str(site_id))
+                            
+                            # Use distinct counts if found, otherwise use row_count
+                            patient_count = len(patient_ids) if patient_ids else row_count
+                            visit_count = len(visit_ids) if visit_ids else 0
+                            site_count = len(site_ids) if site_ids else 0
+                            
+                            state["counts"] = {
+                                "patients": patient_count,
+                                "visits": visit_count,
+                                "sites": site_count
+                            }
+                            reasoning.append(("Counts", f"Found {patient_count} patients, {visit_count} visits, {site_count} sites (from data analysis)"))
+                        except Exception as e:
+                            logger.warning(f"Error analyzing data for counts: {e}")
+                            # Fallback to row_count
+                            state["counts"] = {
+                                "patients": row_count,
+                                "visits": 0,
+                                "sites": 0
+                            }
+                            reasoning.append(("Counts", f"Found {row_count} patients (using row count, couldn't analyze data)"))
+                    else:
+                        # No data, use row_count
+                        state["counts"] = {
+                            "patients": row_count,
+                            "visits": 0,
+                            "sites": 0
+                        }
+                        reasoning.append(("Counts", f"Found {row_count} patients (no data returned)"))
             
             # Set waiting_for to indicate we're waiting for analysis decision
             state["waiting_for"] = "analysis_decision"

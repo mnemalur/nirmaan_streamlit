@@ -944,20 +944,14 @@ def process_query_conversational(query: str):
                     
                     if patients > 0:
                         # Show counts in a prominent way with metrics (displayed before text)
-                        st.markdown("### 📊 Patient Counts")
+                        st.markdown("### 📊 Cohort Summary")
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("**Patients**", f"{patients:,}")
                         with col2:
-                            if visits > 0:
-                                st.metric("**Visits**", f"{visits:,}")
-                            else:
-                                st.metric("**Visits**", "N/A")
+                            st.metric("**Visits**", f"{visits:,}" if visits > 0 else "N/A")
                         with col3:
-                            if sites > 0:
-                                st.metric("**Sites**", f"{sites}")
-                            else:
-                                st.metric("**Sites**", "N/A")
+                            st.metric("**Sites**", f"{sites:,}" if sites > 0 else "N/A")
                         
                         response_parts.append(f"✅ Found **{patients:,} patients**")
                         if visits > 0:
