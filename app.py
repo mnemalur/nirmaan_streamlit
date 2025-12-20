@@ -776,11 +776,14 @@ def process_query_conversational(query: str):
                     existing_state
                 )
                 
-                # Display reasoning steps if available (after spinner completes)
+                # Display reasoning steps prominently (show what agent is doing - not black box)
                 reasoning_steps = result_state.get("reasoning_steps", [])
                 if reasoning_steps:
                     msg_idx = len(st.session_state.messages)
-                    with st.expander("🔍 What I'm doing (reasoning steps)", expanded=False):
+                    # Show reasoning steps expanded during processing to avoid black box feeling
+                    is_processing = (result_state.get("waiting_for") is None and 
+                                   result_state.get("current_step") not in ["error", "new_cohort", "code_selection"])
+                    with st.expander("🔍 What I'm doing (reasoning steps)", expanded=is_processing):
                         for step_name, description in reasoning_steps:
                             st.markdown(f"**{step_name}**: {description}")
                 
@@ -823,6 +826,14 @@ def process_query_conversational(query: str):
                 current_step = result_state.get("current_step", "")
                 waiting_for = result_state.get("waiting_for")
                 response_text = ""  # Initialize to avoid UnboundLocalError
+                
+                # Check if we just processed code selection - show clear messaging
+                if current_step == "code_selection" and not waiting_for:
+                    # User just selected codes, show what we're doing next
+                    selected_count = len(result_state.get("selected_codes", []))
+                    response_parts.append(f"Perfect! I'll update the criteria with the {selected_count} code(s) you selected and find matching patients.")
+                    response_parts.append("\nLet me process this for you...")
+                    response_text = "\n".join(response_parts)
                 
                 # Check if we're waiting for code search confirmation
                 if waiting_for == "code_search_confirmation":
@@ -994,19 +1005,36 @@ def process_query_conversational(query: str):
                 
                 # Check if we're waiting for analysis decision
                 elif waiting_for == "analysis_decision":
-                    # Show counts
+                    # Show counts prominently
                     counts = result_state.get("counts", {})
                     patients = counts.get("patients", 0)
                     visits = counts.get("visits", 0)
                     sites = counts.get("sites", 0)
                     
+                    response_parts.append("✅ **Query completed!** Here are the results:")
+                    response_parts.append("")
+                    
                     if patients > 0:
-                        count_text = f"✅ Found **{patients:,} patients**"
+                        # Show counts in a prominent way with metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("**Patients**", f"{patients:,}")
+                        with col2:
+                            if visits > 0:
+                                st.metric("**Visits**", f"{visits:,}")
+                            else:
+                                st.metric("**Visits**", "N/A")
+                        with col3:
+                            if sites > 0:
+                                st.metric("**Sites**", f"{sites}")
+                            else:
+                                st.metric("**Sites**", "N/A")
+                        
+                        response_parts.append(f"Found **{patients:,} patients**")
                         if visits > 0:
-                            count_text += f" across **{visits:,} visits**"
+                            response_parts.append(f"across **{visits:,} visits**")
                         if sites > 0:
-                            count_text += f" at **{sites} sites**"
-                        response_parts.append(count_text)
+                            response_parts.append(f"at **{sites} sites**")
                     else:
                         response_parts.append("✅ Generated SQL query. Ready to execute.")
                     
@@ -1017,8 +1045,10 @@ def process_query_conversational(query: str):
                         with st.expander("📝 View Generated SQL", expanded=False):
                             st.code(sql, language="sql")
                     
-                    # Ask about analysis conversationally
-                    response_parts.append("\n\n**Would you like to explore this cohort further, or would you like to adjust your criteria?**")
+                    # Ask about next steps conversationally
+                    response_parts.append("\n\n**What would you like to do next?**")
+                    response_parts.append("- Explore this cohort further (demographics, trends, outcomes)")
+                    response_parts.append("- Adjust your criteria to refine the results")
                     response_text = "\n".join(response_parts)
                 
                 elif current_step == "new_cohort":
