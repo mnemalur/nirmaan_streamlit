@@ -1067,11 +1067,11 @@ def process_query_conversational(query: str):
                         # Show codes in expandable section
                         msg_idx = len(st.session_state.messages)
                         with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False):
-                            code_df = pd.DataFrame(codes)
+                        code_df = pd.DataFrame(codes)
                             display_cols = ['code', 'description', 'vocabulary']
-                            available_cols = [col for col in display_cols if col in code_df.columns]
+                        available_cols = [col for col in display_cols if col in code_df.columns]
                             if available_cols:
-                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                        st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                     
                     # Show Genie prompt/enrichment
                     genie_prompt = result_state.get("genie_prompt")
@@ -1086,7 +1086,7 @@ def process_query_conversational(query: str):
                         response_parts.append("I've generated a SQL query to find matching patients.")
                         msg_idx = len(st.session_state.messages)
                         with st.expander("📝 View Generated SQL", expanded=False):
-                            st.code(sql, language="sql")
+                        st.code(sql, language="sql")
                     
                         # Offer to execute
                         if not result_state.get("cohort_table"):
