@@ -880,38 +880,38 @@ def process_query_conversational(query: str):
                     codes = result_state.get("codes", [])
                     if codes:
                         response_parts.append(f"I found **{len(codes)} relevant clinical codes**.")
-                        response_parts.append("\n**Please select which codes you'd like to use:**")
                         
                         # Initialize selected codes in session state if not exists (default: all selected)
                         selection_key = f"code_selection_{st.session_state.session_id}"
                         if selection_key not in st.session_state:
                             st.session_state[selection_key] = [c.get('code') for c in codes if c.get('code')]
                         
-                        # Quick action buttons - show prominently BEFORE expander
+                        # Show prominent action buttons OUTSIDE the response text
                         msg_idx = len(st.session_state.messages)
-                        st.markdown("### Choose Your Codes")
+                        
+                        # Clear call-to-action
+                        st.info("👆 **Choose how you'd like to proceed with these codes:**")
+                        
+                        # Action buttons in a prominent row
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
-                            if st.button("✅ Use All Codes", key=f"use_all_{msg_idx}", type="primary"):
+                            if st.button("✅ **Use All Codes**", key=f"use_all_{msg_idx}", type="primary", use_container_width=True):
                                 st.session_state.selected_codes = codes
                                 process_query_conversational("use all")
                                 st.rerun()
                         with col2:
-                            if st.button("📋 Select Specific", key=f"show_selection_{msg_idx}"):
-                                # Just rerun to show selection UI
+                            if st.button("📋 **Select Specific Codes**", key=f"select_specific_{msg_idx}", use_container_width=True):
+                                # Toggle selection mode - show checkboxes
+                                st.session_state[f"show_selection_{msg_idx}"] = True
                                 st.rerun()
                         with col3:
-                            if st.button("🚀 Use Selected", key=f"use_selected_top_{msg_idx}"):
-                                selected_codes = [c for c in codes if c.get('code') in st.session_state.get(selection_key, [])]
-                                if selected_codes:
-                                    st.session_state.selected_codes = selected_codes
-                                    process_query_conversational("use selected codes")
-                                    st.rerun()
-                                else:
-                                    st.warning("Please select at least one code first")
+                            if st.button("🚫 **Exclude Some**", key=f"exclude_{msg_idx}", use_container_width=True):
+                                # Show exclude UI
+                                st.session_state[f"show_exclude_{msg_idx}"] = True
+                                st.rerun()
                         with col4:
                             selected_count = len(st.session_state.get(selection_key, []))
-                            st.metric("Selected", f"{selected_count}/{len(codes)}")
+                            st.metric("**Selected**", f"{selected_count}/{len(codes)}")
                         
                         st.markdown("---")
                         
@@ -922,31 +922,22 @@ def process_query_conversational(query: str):
                             available_cols = [col for col in display_cols if col in code_df.columns]
                             
                             if available_cols:
-                                # Add checkbox column
-                                selected_codes_list = st.session_state.get(selection_key, [])
+                                # Show table first for easy viewing
+                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                                 
-                                # Quick action buttons
-                                col1, col2, col3 = st.columns(3)
+                                st.markdown("---")
+                                st.markdown("**Select codes using checkboxes below:**")
+                                
+                                # Quick action buttons inside expander
+                                col1, col2 = st.columns(2)
                                 with col1:
-                                    if st.button("✅ Select All", key=f"select_all_{msg_idx}"):
+                                    if st.button("✅ Select All Codes", key=f"select_all_{msg_idx}"):
                                         st.session_state[selection_key] = [c.get('code') for c in codes if c.get('code')]
                                         st.rerun()
                                 with col2:
                                     if st.button("❌ Deselect All", key=f"deselect_all_{msg_idx}"):
                                         st.session_state[selection_key] = []
                                         st.rerun()
-                                with col3:
-                                    if st.button("🚀 Use Selected", key=f"use_selected_{msg_idx}"):
-                                        # Process selected codes
-                                        selected_codes = [c for c in codes if c.get('code') in st.session_state.get(selection_key, [])]
-                                        if selected_codes:
-                                            # Update agent state and proceed
-                                            st.session_state.selected_codes = selected_codes
-                                            # Trigger code confirmation
-                                            process_query_conversational("use selected codes")
-                                            st.rerun()
-                                        else:
-                                            st.warning("Please select at least one code")
                                 
                                 st.markdown("---")
                                 
@@ -959,7 +950,10 @@ def process_query_conversational(query: str):
                                     is_selected = code_value in st.session_state.get(selection_key, [])
                                     checkbox_key = f"code_checkbox_{msg_idx}_{idx}_{code_value}"
                                     
-                                    checkbox_label = f"**{code_value}** - {code_row.get('description', 'N/A')} ({code_row.get('vocabulary', 'N/A')})"
+                                    # Format checkbox label nicely
+                                    desc = code_row.get('description', 'N/A')
+                                    vocab = code_row.get('vocabulary', 'N/A')
+                                    checkbox_label = f"**{code_value}** - {desc} ({vocab})"
                                     
                                     if st.checkbox(checkbox_label, value=is_selected, key=checkbox_key):
                                         # Add to selection
@@ -972,9 +966,19 @@ def process_query_conversational(query: str):
                                         if code_value in st.session_state.get(selection_key, []):
                                             st.session_state[selection_key].remove(code_value)
                                 
-                                # Show selection count
+                                # Show selection count and action button
                                 selected_count = len(st.session_state.get(selection_key, []))
-                                st.info(f"📊 {selected_count} of {len(codes)} codes selected")
+                                st.markdown("---")
+                                st.info(f"📊 **{selected_count} of {len(codes)} codes selected**")
+                                
+                                if st.button("🚀 Proceed with Selected Codes", key=f"proceed_selected_{msg_idx}", type="primary"):
+                                    selected_codes = [c for c in codes if c.get('code') in st.session_state.get(selection_key, [])]
+                                    if selected_codes:
+                                        st.session_state.selected_codes = selected_codes
+                                        process_query_conversational("use selected codes")
+                                        st.rerun()
+                                    else:
+                                        st.error("⚠️ Please select at least one code to proceed")
                         
                         # Ask about code selection conversationally
                         response_parts.append("\n\n**Select codes above, then click 'Use Selected', or say 'use all' to use all codes.**")
