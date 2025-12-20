@@ -1,60 +1,8 @@
 # Databricks App Configuration
-# This file defines how to deploy and run the Streamlit app in Databricks
+# Simple configuration for running Streamlit app in Databricks
 
-name: Clinical Cohort Assistant
-description: Databricks-powered cohort builder with conversational LangGraph agent interface
-
-# Entry point - the main Streamlit app file
-entrypoint: app.py
-
-# Runtime configuration
-runtime:
-  type: streamlit
-  version: "1.28.0"
-
-# Dependencies
-# Note: Databricks will install packages from requirements.txt
-# This section can specify additional runtime dependencies if needed
-dependencies:
-  - requirements.txt
-
-# Environment variables
-# These will be loaded from .env file in Databricks
-# Make sure to create .env file with actual values
-env:
-  # Load from .env file (create this in Databricks with your actual values)
-  file: .env
-
-# Resources (optional - adjust based on your needs)
-resources:
-  # CPU and memory can be specified if needed
-  # cpu: "2"
-  # memory: "4Gi"
-
-# Health check (optional)
-health_check:
-  enabled: true
-  path: "/"
-  interval: 30
-
-# Logging
-logging:
-  level: INFO
-
-# Streamlit specific settings
-streamlit:
-  # Server settings
-  server:
-    port: 8501
-    address: "0.0.0.0"
-  
-  # Browser settings
-  browser:
-    gatherUsageStats: false
-  
-  # Theme (optional)
-  # theme:
-  #   primaryColor: "#1f77b4"
-  #   backgroundColor: "#ffffff"
-  #   secondaryBackgroundColor: "#f0f2f6"
+command: ["streamlit",
+           "run", 
+           "app.py"
+]
 
