@@ -658,33 +658,67 @@ class CohortAgent:
                     has_count_columns = any(keyword in ' '.join(column_names) for keyword in ['patient_count', 'visit_count', 'site_count', 'count'])
                     
                     row = genie_data[0]
+                    
+                    # Convert row to dict if it's a list/tuple (using column names as keys)
+                    if not isinstance(row, dict) and genie_columns:
+                        # Row is a list/tuple - convert to dict using column names
+                        try:
+                            row = dict(zip(genie_columns, row))
+                            logger.info(f"🔍 Converted list/tuple row to dict using columns: {genie_columns}")
+                        except Exception as e:
+                            logger.warning(f"Could not convert row to dict: {e}")
+                    
                     if isinstance(row, dict):
+                        # Log what we received for debugging
+                        logger.info(f"🔍 DEBUG: Genie returned single row. Columns: {genie_columns}")
+                        logger.info(f"🔍 DEBUG: Row keys: {list(row.keys())}")
+                        logger.info(f"🔍 DEBUG: Row values: {row}")
+                        
                         # Try to extract count values - check multiple possible column name variations
                         # Case-insensitive matching for column names
-                        patient_count = 0
-                        visit_count = 0
-                        site_count = 0
+                        patient_count = None
+                        visit_count = None
+                        site_count = None
                         
-                        # Try exact matches first
+                        # Try exact matches first - iterate through all keys
                         for key, value in row.items():
-                            key_lower = key.lower()
-                            if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
-                                patient_count = value if value else 0
-                            elif 'visit' in key_lower and ('count' in key_lower or key_lower == 'visits' or 'encounter' in key_lower):
-                                visit_count = value if value else 0
-                            elif 'site' in key_lower and ('count' in key_lower or key_lower == 'sites' or 'provider' in key_lower):
-                                site_count = value if value else 0
+                            key_lower = str(key).lower()
+                            value_num = None
+                            
+                            # Try to convert value to number
+                            try:
+                                if value is not None:
+                                    value_num = int(float(str(value))) if str(value) else None
+                            except (ValueError, TypeError):
+                                pass
+                            
+                            # Match patient count columns
+                            if patient_count is None:
+                                if ('patient' in key_lower and 'count' in key_lower) or key_lower == 'patients' or key_lower == 'patient_count':
+                                    patient_count = value_num if value_num is not None else 0
+                                    logger.info(f"✅ Found patient_count in column '{key}' = {patient_count}")
+                            
+                            # Match visit count columns
+                            if visit_count is None:
+                                if ('visit' in key_lower and 'count' in key_lower) or ('encounter' in key_lower and 'count' in key_lower) or key_lower in ['visits', 'visit_count', 'encounter_count']:
+                                    visit_count = value_num if value_num is not None else 0
+                                    logger.info(f"✅ Found visit_count in column '{key}' = {visit_count}")
+                            
+                            # Match site count columns
+                            if site_count is None:
+                                if ('site' in key_lower and 'count' in key_lower) or ('provider' in key_lower and 'count' in key_lower) or key_lower in ['sites', 'site_count', 'provider_count']:
+                                    site_count = value_num if value_num is not None else 0
+                                    logger.info(f"✅ Found site_count in column '{key}' = {site_count}")
                         
-                        # If we found at least one count, use these values
-                        if patient_count > 0 or visit_count > 0 or site_count > 0 or has_count_columns:
+                        # If we found at least one count OR if columns suggest it's a count result, use these values
+                        if patient_count is not None or visit_count is not None or site_count is not None or has_count_columns:
                             state["counts"] = {
-                                "patients": int(patient_count) if patient_count else 0,
-                                "visits": int(visit_count) if visit_count else 0,
-                                "sites": int(site_count) if site_count else 0
+                                "patients": int(patient_count) if patient_count is not None else 0,
+                                "visits": int(visit_count) if visit_count is not None else 0,
+                                "sites": int(site_count) if site_count is not None else 0
                             }
-                            logger.info(f"Extracted counts from Genie: patients={patient_count}, visits={visit_count}, sites={site_count}")
-                            logger.info(f"Genie columns: {genie_columns}, Row keys: {list(row.keys()) if isinstance(row, dict) else 'N/A'}")
-                            reasoning.append(("Counts", f"Found {patient_count} patients, {visit_count} visits, {site_count} sites"))
+                            logger.info(f"✅ FINAL EXTRACTED COUNTS: patients={state['counts']['patients']}, visits={state['counts']['visits']}, sites={state['counts']['sites']}")
+                            reasoning.append(("Counts", f"Found {state['counts']['patients']} patients, {state['counts']['visits']} visits, {state['counts']['sites']} sites"))
                         else:
                             # Fallback: if single row but no count columns found, log for debugging
                             logger.warning(f"Single row returned but couldn't extract counts. Columns: {genie_columns}, Row keys: {list(row.keys()) if isinstance(row, dict) else 'N/A'}")

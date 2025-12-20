@@ -939,6 +939,12 @@ def process_query_conversational(query: str):
                     visits = counts.get("visits", 0)
                     sites = counts.get("sites", 0)
                     
+                    # Debug: Log what we're getting
+                    logger.info(f"🔍 UI DEBUG: counts from result_state: {counts}")
+                    logger.info(f"🔍 UI DEBUG: patients={patients}, visits={visits}, sites={sites}")
+                    logger.info(f"🔍 UI DEBUG: genie_data length: {len(result_state.get('genie_data', []))}")
+                    logger.info(f"🔍 UI DEBUG: genie_columns: {result_state.get('genie_columns', [])}")
+                    
                     response_parts.append("🎉 **Great! I found matching patients for your criteria.**")
                     response_parts.append("")
                     
