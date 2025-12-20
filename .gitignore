@@ -45,6 +45,10 @@ env/
 # Allow .env.example template
 !.env.example
 
+# Databricks deployment files (keep app.yaml, but .env should not be committed)
+# app.yaml is committed (deployment config)
+# .env is NOT committed (contains secrets)
+
 # Streamlit
 .streamlit/
 
