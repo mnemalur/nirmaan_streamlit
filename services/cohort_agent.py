@@ -279,12 +279,16 @@ class CohortAgent:
                         try:
                             logger.info(f"Searching codes for condition: {condition}")
                             condition_codes = self.vector_service.search_codes(condition.strip(), limit=10)
-                            # Tag each code with the condition it came from
-                            for code in condition_codes:
-                                code = dict(code)  # Make a copy
-                                code["condition"] = condition.strip()
-                                all_codes.append(code)
-                            logger.info(f"Found {len(condition_codes)} codes for condition: {condition}")
+                            # Ensure condition_codes is a list
+                            if condition_codes:
+                                # Tag each code with the condition it came from
+                                for code in condition_codes:
+                                    code = dict(code)  # Make a copy
+                                    code["condition"] = condition.strip()
+                                    all_codes.append(code)
+                                logger.info(f"Found {len(condition_codes)} codes for condition: {condition}")
+                            else:
+                                logger.info(f"No codes found for condition: {condition}")
                         except Exception as e:
                             logger.error(f"Error searching codes for condition '{condition}': {e}")
                             continue
