@@ -56,60 +56,83 @@ class DatabricksConfig:
             self._init_from_env()
     
     def _init_from_databricks(self):
-        """Initialize from Databricks workspace context (no explicit token needed)"""
+        """
+        Initialize from .env file first, then fall back to Databricks workspace context.
+        Priority: .env file > dbutils.secrets > Spark config > defaults
+        """
         try:
-            # Get workspace URL from Spark context or environment
-            if _spark_context:
+            # Priority 1: Always check .env file first (already loaded via load_dotenv())
+            # Priority 2: Try dbutils.secrets if .env doesn't have it
+            # Priority 3: Try Spark config
+            # Priority 4: Use defaults
+            
+            # DATABRICKS_HOST: .env > Spark config
+            self.host = os.getenv("DATABRICKS_HOST")
+            if not self.host and _spark_context:
                 spark_conf = _spark_context.getConf()
-                # Try to get workspace URL from Spark config
                 workspace_url = spark_conf.get("spark.databricks.workspaceUrl", None)
                 if workspace_url:
                     self.host = f"https://{workspace_url}" if not workspace_url.startswith("http") else workspace_url
-                else:
-                    self.host = os.getenv("DATABRICKS_HOST")
-            else:
-                self.host = os.getenv("DATABRICKS_HOST")
             
-            # In Databricks runtime, token is handled automatically by WorkspaceClient
-            # Only set token if explicitly provided (for cross-workspace access)
-            self.token = os.getenv("DATABRICKS_TOKEN")  # Can be None - WorkspaceClient will use runtime auth
+            # DATABRICKS_TOKEN: .env > dbutils.secrets (optional in Databricks runtime)
+            self.token = os.getenv("DATABRICKS_TOKEN")
+            if not self.token and _dbutils:
+                try:
+                    self.token = _dbutils.secrets.get(scope="tokens", key="databricks_token")
+                except:
+                    pass  # Token is optional in Databricks runtime
             
-            # Try to get config from dbutils.secrets first, then environment
-            if _dbutils:
+            # GENIE_SPACE_ID: .env > dbutils.secrets
+            self.space_id = os.getenv("GENIE_SPACE_ID")
+            if not self.space_id and _dbutils:
                 try:
                     self.space_id = _dbutils.secrets.get(scope="tokens", key="genie_space_id")
                 except:
-                    self.space_id = os.getenv("GENIE_SPACE_ID")
-                
+                    pass
+            
+            # PATIENT_CATALOG: .env > dbutils.secrets > default
+            self.patient_catalog = os.getenv("PATIENT_CATALOG")
+            if not self.patient_catalog and _dbutils:
                 try:
                     self.patient_catalog = _dbutils.secrets.get(scope="tokens", key="patient_catalog")
                 except:
-                    self.patient_catalog = os.getenv("PATIENT_CATALOG")
-                
+                    pass
+            
+            # PATIENT_SCHEMA: .env > dbutils.secrets
+            self.patient_schema = os.getenv("PATIENT_SCHEMA")
+            if not self.patient_schema and _dbutils:
                 try:
                     self.patient_schema = _dbutils.secrets.get(scope="tokens", key="patient_schema")
                 except:
-                    self.patient_schema = os.getenv("PATIENT_SCHEMA")
-                
+                    pass
+            
+            # VECTOR_SCHEMA: .env > dbutils.secrets
+            self.vector_schema = os.getenv("VECTOR_SCHEMA")
+            if not self.vector_schema and _dbutils:
                 try:
                     self.vector_schema = _dbutils.secrets.get(scope="tokens", key="vector_schema")
                 except:
-                    self.vector_schema = os.getenv("VECTOR_SCHEMA")
-                
+                    pass
+            
+            # VECTOR_CATALOG: .env > PATIENT_CATALOG
+            self.vector_catalog = os.getenv("VECTOR_CATALOG") or self.patient_catalog
+            
+            # VECTOR_FUNCTION: .env > default
+            self.vector_function = os.getenv("VECTOR_FUNCTION", "standard_code_lookup")
+            
+            # COHORT_CATALOG: .env > default
+            self.cohort_catalog = os.getenv("COHORT_CATALOG", "pasrt_uat")
+            
+            # COHORT_SCHEMA: .env > default
+            self.cohort_schema = os.getenv("COHORT_SCHEMA", "pas_temp_cohort")
+            
+            # SQL_WAREHOUSE_ID: .env > dbutils.secrets
+            self.warehouse_id = os.getenv("SQL_WAREHOUSE_ID")
+            if not self.warehouse_id and _dbutils:
                 try:
                     self.warehouse_id = _dbutils.secrets.get(scope="tokens", key="warehouse_id")
                 except:
-                    self.warehouse_id = os.getenv("SQL_WAREHOUSE_ID")
-            else:
-                # Fallback to environment variables
-                self.space_id = os.getenv("GENIE_SPACE_ID")
-                self.patient_catalog = os.getenv("PATIENT_CATALOG")
-                self.patient_schema = os.getenv("PATIENT_SCHEMA")
-                self.vector_schema = os.getenv("VECTOR_SCHEMA")
-                self.warehouse_id = os.getenv("SQL_WAREHOUSE_ID")
-            
-            # Vector catalog defaults to patient catalog if not set
-            self.vector_catalog = os.getenv("VECTOR_CATALOG") or self.patient_catalog
+                    pass
             
         except Exception as e:
             # Fallback to environment variables if Databricks init fails
