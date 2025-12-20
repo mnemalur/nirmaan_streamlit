@@ -823,51 +823,66 @@ def render_chat_page():
                         st.markdown(f"### 📋 {cond} ({len(cond_codes)} codes)")
                         
                         # Create DataFrame with proper column handling
+                        normalized_codes = []
                         try:
                             # Normalize code dictionaries to ensure consistent columns
-                            normalized_codes = []
                             for c in cond_codes:
-                                normalized = {
-                                    'code': c.get('code') or c.get('concept_code') or c.get('source_code') or '',
-                                    'description': c.get('description') or c.get('concept_name') or '',
-                                    'vocabulary': c.get('vocabulary') or c.get('vocabulary_id') or '',
-                                    'confidence': c.get('confidence', '')
-                                }
-                                normalized_codes.append(normalized)
+                                if isinstance(c, dict):
+                                    normalized = {
+                                        'code': str(c.get('code') or c.get('concept_code') or c.get('source_code') or 'N/A'),
+                                        'description': str(c.get('description') or c.get('concept_name') or 'No description'),
+                                        'vocabulary': str(c.get('vocabulary') or c.get('vocabulary_id') or 'N/A'),
+                                        'confidence': c.get('confidence', '')
+                                    }
+                                    normalized_codes.append(normalized)
                             
-                            code_df = pd.DataFrame(normalized_codes)
-                            
-                            # Select columns to display (only show non-empty columns)
-                            display_cols = []
-                            for col in ['code', 'description', 'vocabulary', 'confidence']:
-                                if col in code_df.columns and not code_df[col].isna().all():
-                                    display_cols.append(col)
-                            
-                            if display_cols and not code_df.empty:
-                                # Format confidence as percentage if it's numeric
-                                if 'confidence' in display_cols:
-                                    try:
-                                        code_df['confidence'] = code_df['confidence'].apply(
-                                            lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) else str(x)
-                                        )
-                                    except:
-                                        pass
+                            if normalized_codes:
+                                # Import pandas at function level to ensure it's accessible
+                                import pandas as pd
+                                code_df = pd.DataFrame(normalized_codes)
                                 
-                                # Display DataFrame with proper formatting
-                                st.dataframe(
-                                    code_df[display_cols], 
-                                    use_container_width=True, 
-                                    hide_index=True,
-                                    height=min(300, len(code_df) * 35 + 40)  # Dynamic height
-                                )
+                                # Select columns to display (only show non-empty columns)
+                                display_cols = []
+                                for col in ['code', 'description', 'vocabulary', 'confidence']:
+                                    if col in code_df.columns and not code_df[col].isna().all():
+                                        display_cols.append(col)
+                                
+                                if display_cols and not code_df.empty:
+                                    # Format confidence as percentage if it's numeric
+                                    if 'confidence' in display_cols:
+                                        try:
+                                            code_df['confidence'] = code_df['confidence'].apply(
+                                                lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) and x != '' else str(x)
+                                            )
+                                        except:
+                                            pass
+                                    
+                                    # Display DataFrame with proper formatting
+                                    st.dataframe(
+                                        code_df[display_cols], 
+                                        use_container_width=True, 
+                                        hide_index=True,
+                                        height=min(300, len(code_df) * 35 + 40)  # Dynamic height
+                                    )
+                                else:
+                                    # Fallback: show raw data if DataFrame creation fails
+                                    st.warning("Could not format codes as table. Showing raw data.")
+                                    st.json(cond_codes)
                             else:
-                                # Fallback: show raw data if DataFrame creation fails
-                                st.warning("Could not format codes as table. Showing raw data.")
+                                st.warning("No valid code data found.")
                                 st.json(cond_codes)
                         except Exception as e:
                             logger.error(f"Error displaying codes DataFrame: {e}", exc_info=True)
                             st.warning(f"Could not display codes as table: {str(e)}")
-                            st.json(cond_codes)
+                            # Try to show as table even if there was an error
+                            if normalized_codes:
+                                try:
+                                    import pandas as pd
+                                    st.dataframe(pd.DataFrame(normalized_codes), use_container_width=True, hide_index=True)
+                                except:
+                                    st.json(cond_codes)
+                            else:
+                                st.json(cond_codes)
 
                         # Create selection options from codes (use normalized data if available)
                         label_to_code = {}
@@ -949,37 +964,18 @@ def render_chat_page():
         row_count = genie_result.get("row_count", 0)
         exec_time = genie_result.get("execution_time")
 
-        # Compact Step 4: Show summary and data in a compact way
+        # Step 4: Show results in tabs
         st.markdown("### 📊 Step 4: Query Results")
         
-        # Show SQL in compact expander
-        if sql:
-            with st.expander("📝 View Generated SQL", expanded=False):
-                st.code(sql, language="sql")
+        # Show execution time if available
+        if exec_time is not None:
+            st.caption(f"⏱️ Execution time: {exec_time}")
         
-        # Compact results summary
-        result_summary_col1, result_summary_col2 = st.columns([3, 1])
-        with result_summary_col1:
-            # Display row count with clear messaging
-            if row_count is not None and row_count > 0:
-                if data and len(data) > 0:
-                    if len(data) < row_count:
-                        st.info(f"📊 **{row_count:,} total rows** | Showing {len(data):,} rows (max 5,000)")
-                    else:
-                        st.info(f"📊 **{row_count:,} rows** (showing up to 5,000)")
-                else:
-                    st.info(f"📊 **{row_count:,} total rows** (data may be truncated)")
-            elif data and len(data) > 0:
-                st.info(f"📊 **{len(data):,} rows** (showing up to 5,000)")
-            elif row_count == 0:
-                st.info("📊 **0 rows** - No patients match this criteria")
+        # Use tabs for Data Table and SQL
+        result_tabs = st.tabs(["📋 Data Table", "📝 View SQL"])
         
-        with result_summary_col2:
-            if exec_time is not None:
-                st.caption(f"⏱️ {exec_time}")
-        
-        # Compact data display in expander
-        with st.expander("📋 View Data Table", expanded=False):
+        # Tab 1: Data Table
+        with result_tabs[0]:
 
             # Display the actual data if available (limit to 5000 rows max)
             MAX_DISPLAY_ROWS = 5000
@@ -1070,19 +1066,13 @@ def render_chat_page():
                     logger.info(f"🔍 DEBUG: display_df.columns before st.dataframe: {list(display_df.columns)}")
                     logger.info(f"🔍 DEBUG: Are columns still named (not numeric)? {all(not str(col).isdigit() for col in display_df.columns) if len(display_df.columns) > 0 else 'N/A'}")
                     
-                    # Show info about row limits
+                    # Show row count info (compact caption, no blue band)
                     if total_rows > MAX_DISPLAY_ROWS:
-                        st.info(
-                            f"📊 Showing first {MAX_DISPLAY_ROWS:,} of {total_rows:,} total rows. "
-                            f"Data is limited to {MAX_DISPLAY_ROWS:,} rows for performance. "
-                            f"Use the generated SQL to query the full dataset if needed."
-                        )
+                        st.caption(f"Showing first {MAX_DISPLAY_ROWS:,} of {total_rows:,} rows (limited for performance)")
                     elif row_count and row_count > total_rows:
-                        # Genie reported more rows than we have in data (truncated)
-                        st.info(
-                            f"📊 Showing {total_rows:,} rows. Genie reported {row_count:,} total rows. "
-                            f"Data may be truncated. Use the generated SQL to query the full dataset."
-                        )
+                        st.caption(f"Showing {total_rows:,} of {row_count:,} rows (data may be truncated)")
+                    elif row_count:
+                        st.caption(f"Total rows: {row_count:,}")
                     
                     # Display the data (already limited to MAX_DISPLAY_ROWS)
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
@@ -1106,10 +1096,19 @@ def render_chat_page():
                     f"This may be because:\n"
                     f"- The result set is very large and was truncated\n"
                     f"- Data extraction encountered an issue\n\n"
-                    f"You can use the generated SQL above to query the full dataset directly."
+                    f"You can use the generated SQL in the 'View SQL' tab to query the full dataset directly."
                 )
+            elif row_count == 0:
+                st.info("📊 **0 rows** - No patients match this criteria")
         
-        # Show summary statistics outside data table expander (to avoid nesting)
+        # Tab 2: View SQL
+        with result_tabs[1]:
+            if sql:
+                st.code(sql, language="sql")
+            else:
+                st.info("No SQL query available")
+        
+        # Show summary statistics (outside tabs)
         if hasattr(st.session_state, '_last_display_df'):
             display_df = st.session_state._last_display_df
             numeric_cols = display_df.select_dtypes(include=['number']).columns
@@ -1374,192 +1373,163 @@ def display_dimension_results_compact(results: dict):
         st.info("No dimension data available")
         return
     
-    # Display all charts in a compact grid layout (3-4 rows)
-    # Row 1: Patient Demographics (3 charts)
-    st.markdown("#### 👥 Patient Demographics")
-    demo_col1, demo_col2, demo_col3 = st.columns(3)
+    # Professional color palette (blue/yellow/green - simple and clean)
+    COLOR_PALETTE = ['#2563eb', '#fbbf24', '#10b981', '#3b82f6', '#f59e0b', '#059669', '#1d4ed8', '#d97706']
+    COLOR_SCALE = 'Blues'  # For continuous scales, use Blues
     
-    # Professional blue color palette
-    BLUE_PALETTE = ['#1e3a8a', '#3b82f6', '#60a5fa', '#93c5fd', '#dbeafe', '#bfdbfe', '#7c3aed', '#8b5cf6']
-    BLUE_SCALE = 'Blues'
+    # Organize charts into tabs
+    chart_tabs = st.tabs(["👥 Patient Demographics", "🏥 Visit Characteristics", "🏛️ Site Characteristics"])
     
-    with demo_col1:
-        if dimensions.get('gender'):
-            gender_df = pd.DataFrame(dimensions['gender'])
-            if not gender_df.empty and 'gender' in gender_df.columns and 'patient_count' in gender_df.columns:
-                fig = go.Figure(data=[go.Pie(
-                    labels=gender_df['gender'], 
-                    values=gender_df['patient_count'], 
-                    hole=0.4,
-                    marker_colors=BLUE_PALETTE[:len(gender_df)]
-                )])
-                fig.update_layout(title='Gender', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
-                st.plotly_chart(fig, use_container_width=True)
-    
-    with demo_col2:
-        if dimensions.get('race'):
-            race_df = pd.DataFrame(dimensions['race'])
-            if not race_df.empty and 'race' in race_df.columns and 'patient_count' in race_df.columns:
-                fig = px.bar(race_df.head(8), x='race', y='patient_count', title='Race (Top 8)', 
-                           labels={'patient_count': 'Count', 'race': 'Race'}, 
-                           color='patient_count', color_continuous_scale=BLUE_SCALE)
-                fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig, use_container_width=True)
-    
-    with demo_col3:
-        if dimensions.get('ethnicity'):
-            ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
-            if not ethnicity_df.empty and 'ethnicity' in ethnicity_df.columns and 'patient_count' in ethnicity_df.columns:
-                fig = go.Figure(data=[go.Pie(
-                    labels=ethnicity_df['ethnicity'], 
-                    values=ethnicity_df['patient_count'], 
-                    hole=0.4,
-                    marker_colors=BLUE_PALETTE[:len(ethnicity_df)]
-                )])
-                fig.update_layout(title='Ethnicity', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
-                st.plotly_chart(fig, use_container_width=True)
-    
-    # Row 2: Visit Characteristics (3 charts)
-    st.markdown("#### 🏥 Visit Characteristics")
-    visit_col1, visit_col2, visit_col3 = st.columns(3)
-    
-    with visit_col1:
-        if dimensions.get('visit_level'):
-            visit_df = pd.DataFrame(dimensions['visit_level'])
-            if not visit_df.empty and 'visit_level' in visit_df.columns and 'encounter_count' in visit_df.columns:
-                fig = px.bar(visit_df, x='visit_level', y='encounter_count', title='Visit Level',
-                           labels={'encounter_count': 'Count', 'visit_level': 'Visit Level'}, 
-                           color='encounter_count', color_continuous_scale=BLUE_SCALE)
-                fig.update_layout(height=200, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig, use_container_width=True)
-    
-    with visit_col2:
-        if dimensions.get('admit_type'):
-            admit_type_df = pd.DataFrame(dimensions['admit_type'])
-            if not admit_type_df.empty and 'admit_type' in admit_type_df.columns and 'encounter_count' in admit_type_df.columns:
-                fig = px.bar(admit_type_df, x='admit_type', y='encounter_count', title='Admit Type',
-                           labels={'encounter_count': 'Count', 'admit_type': 'Admit Type'}, 
-                           color='encounter_count', color_continuous_scale=BLUE_SCALE)
-                fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig, use_container_width=True)
-    
-    with visit_col3:
-        if dimensions.get('admit_source'):
-            admit_source_df = pd.DataFrame(dimensions['admit_source'])
-            if not admit_source_df.empty and 'admit_source' in admit_source_df.columns and 'encounter_count' in admit_source_df.columns:
-                fig = px.bar(admit_source_df.head(8), x='admit_source', y='encounter_count', title='Admit Source (Top 8)',
-                           labels={'encounter_count': 'Count', 'admit_source': 'Admit Source'}, 
-                           color='encounter_count', color_continuous_scale=BLUE_SCALE)
-                fig.update_layout(height=200, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig, use_container_width=True)
-    
-    # Row 3: Site Characteristics (3 charts)
-    st.markdown("#### 🏛️ Site Characteristics")
-    site_col1, site_col2, site_col3 = st.columns(3)
-    
-    with site_col1:
-        if dimensions.get('urban_rural'):
-            urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
-            if not urban_rural_df.empty and 'location_type' in urban_rural_df.columns and 'patient_count' in urban_rural_df.columns:
-                fig = go.Figure(data=[go.Pie(
-                    labels=urban_rural_df['location_type'], 
-                    values=urban_rural_df['patient_count'], 
-                    hole=0.4,
-                    marker_colors=BLUE_PALETTE[:len(urban_rural_df)]
-                )])
-                fig.update_layout(title='Urban/Rural', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
-                st.plotly_chart(fig, use_container_width=True)
-    
-    with site_col2:
-        if dimensions.get('teaching'):
-            teaching_df = pd.DataFrame(dimensions['teaching'])
-            if not teaching_df.empty and 'teaching_status' in teaching_df.columns and 'patient_count' in teaching_df.columns:
-                fig = go.Figure(data=[go.Pie(
-                    labels=teaching_df['teaching_status'], 
-                    values=teaching_df['patient_count'], 
-                    hole=0.4,
-                    marker_colors=BLUE_PALETTE[:len(teaching_df)]
-                )])
-                fig.update_layout(title='Teaching Status', height=200, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
-                st.plotly_chart(fig, use_container_width=True)
-    
-    with site_col3:
-        if dimensions.get('bed_count'):
-            bed_count_df = pd.DataFrame(dimensions['bed_count'])
-            if not bed_count_df.empty and 'bed_count_group' in bed_count_df.columns and 'patient_count' in bed_count_df.columns:
-                fig = px.bar(bed_count_df, x='bed_count_group', y='patient_count', title='Bed Count Groups',
-                           labels={'patient_count': 'Count', 'bed_count_group': 'Bed Count'}, 
-                           color='patient_count', color_continuous_scale=BLUE_SCALE)
-                fig.update_layout(height=200, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig, use_container_width=True)
-    
-    # Data tables in a single expander
-    st.markdown("---")
-    with st.expander("📊 View All Dimension Data Tables", expanded=False):
-        data_tabs = st.tabs(["Patient Demographics", "Visit Characteristics", "Site Characteristics"])
+    # Tab 1: Patient Demographics
+    with chart_tabs[0]:
+        demo_col1, demo_col2, demo_col3 = st.columns(3)
         
-        with data_tabs[0]:
-            data_col1, data_col2, data_col3 = st.columns(3)
-            with data_col1:
-                if dimensions.get('gender'):
-                    gender_df = pd.DataFrame(dimensions['gender'])
-                    if not gender_df.empty:
-                        st.markdown("**Gender**")
+        with demo_col1:
+            if dimensions.get('gender'):
+                gender_df = pd.DataFrame(dimensions['gender'])
+                if not gender_df.empty and 'gender' in gender_df.columns and 'patient_count' in gender_df.columns:
+                    # Toggle for chart/data view
+                    show_data = st.checkbox("Show data table", key="gender_data_toggle")
+                    if show_data:
                         st.dataframe(gender_df, use_container_width=True, hide_index=True)
-            with data_col2:
-                if dimensions.get('race'):
-                    race_df = pd.DataFrame(dimensions['race'])
-                    if not race_df.empty:
-                        st.markdown("**Race**")
+                    else:
+                        fig = go.Figure(data=[go.Pie(
+                            labels=gender_df['gender'], 
+                            values=gender_df['patient_count'], 
+                            hole=0.4,
+                            marker_colors=COLOR_PALETTE[:len(gender_df)]
+                        )])
+                        fig.update_layout(title='Gender', height=300, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
+                        st.plotly_chart(fig, use_container_width=True)
+        
+        with demo_col2:
+            if dimensions.get('race'):
+                race_df = pd.DataFrame(dimensions['race'])
+                if not race_df.empty and 'race' in race_df.columns and 'patient_count' in race_df.columns:
+                    show_data = st.checkbox("Show data table", key="race_data_toggle")
+                    if show_data:
                         st.dataframe(race_df, use_container_width=True, hide_index=True)
-            with data_col3:
-                if dimensions.get('ethnicity'):
-                    ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
-                    if not ethnicity_df.empty:
-                        st.markdown("**Ethnicity**")
+                    else:
+                        fig = px.bar(race_df.head(8), x='race', y='patient_count', title='Race (Top 8)', 
+                                   labels={'patient_count': 'Count', 'race': 'Race'}, 
+                                   color='patient_count', color_continuous_scale=COLOR_SCALE)
+                        fig.update_layout(height=300, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
+                        st.plotly_chart(fig, use_container_width=True)
+        
+        with demo_col3:
+            if dimensions.get('ethnicity'):
+                ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
+                if not ethnicity_df.empty and 'ethnicity' in ethnicity_df.columns and 'patient_count' in ethnicity_df.columns:
+                    show_data = st.checkbox("Show data table", key="ethnicity_data_toggle")
+                    if show_data:
                         st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
+                    else:
+                        fig = go.Figure(data=[go.Pie(
+                            labels=ethnicity_df['ethnicity'], 
+                            values=ethnicity_df['patient_count'], 
+                            hole=0.4,
+                            marker_colors=COLOR_PALETTE[:len(ethnicity_df)]
+                        )])
+                        fig.update_layout(title='Ethnicity', height=300, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
+                        st.plotly_chart(fig, use_container_width=True)
+    
+    # Tab 2: Visit Characteristics
+    with chart_tabs[1]:
+        visit_col1, visit_col2, visit_col3 = st.columns(3)
         
-        with data_tabs[1]:
-            data_col1, data_col2, data_col3 = st.columns(3)
-            with data_col1:
-                if dimensions.get('visit_level'):
-                    visit_df = pd.DataFrame(dimensions['visit_level'])
-                    if not visit_df.empty:
-                        st.markdown("**Visit Level**")
+        with visit_col1:
+            if dimensions.get('visit_level'):
+                visit_df = pd.DataFrame(dimensions['visit_level'])
+                if not visit_df.empty and 'visit_level' in visit_df.columns and 'encounter_count' in visit_df.columns:
+                    show_data = st.checkbox("Show data table", key="visit_level_data_toggle")
+                    if show_data:
                         st.dataframe(visit_df, use_container_width=True, hide_index=True)
-            with data_col2:
-                if dimensions.get('admit_type'):
-                    admit_type_df = pd.DataFrame(dimensions['admit_type'])
-                    if not admit_type_df.empty:
-                        st.markdown("**Admit Type**")
-                        st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
-            with data_col3:
-                if dimensions.get('admit_source'):
-                    admit_source_df = pd.DataFrame(dimensions['admit_source'])
-                    if not admit_source_df.empty:
-                        st.markdown("**Admit Source**")
-                        st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
+                    else:
+                        fig = px.bar(visit_df, x='visit_level', y='encounter_count', title='Visit Level',
+                                   labels={'encounter_count': 'Count', 'visit_level': 'Visit Level'}, 
+                                   color='encounter_count', color_continuous_scale=COLOR_SCALE)
+                        fig.update_layout(height=300, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
+                        st.plotly_chart(fig, use_container_width=True)
         
-        with data_tabs[2]:
-            data_col1, data_col2, data_col3 = st.columns(3)
-            with data_col1:
-                if dimensions.get('urban_rural'):
-                    urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
-                    if not urban_rural_df.empty:
-                        st.markdown("**Urban/Rural**")
+        with visit_col2:
+            if dimensions.get('admit_type'):
+                admit_type_df = pd.DataFrame(dimensions['admit_type'])
+                if not admit_type_df.empty and 'admit_type' in admit_type_df.columns and 'encounter_count' in admit_type_df.columns:
+                    show_data = st.checkbox("Show data table", key="admit_type_data_toggle")
+                    if show_data:
+                        st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
+                    else:
+                        fig = px.bar(admit_type_df, x='admit_type', y='encounter_count', title='Admit Type',
+                                   labels={'encounter_count': 'Count', 'admit_type': 'Admit Type'}, 
+                                   color='encounter_count', color_continuous_scale=COLOR_SCALE)
+                        fig.update_layout(height=300, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
+                        st.plotly_chart(fig, use_container_width=True)
+        
+        with visit_col3:
+            if dimensions.get('admit_source'):
+                admit_source_df = pd.DataFrame(dimensions['admit_source'])
+                if not admit_source_df.empty and 'admit_source' in admit_source_df.columns and 'encounter_count' in admit_source_df.columns:
+                    show_data = st.checkbox("Show data table", key="admit_source_data_toggle")
+                    if show_data:
+                        st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
+                    else:
+                        fig = px.bar(admit_source_df.head(8), x='admit_source', y='encounter_count', title='Admit Source (Top 8)',
+                                   labels={'encounter_count': 'Count', 'admit_source': 'Admit Source'}, 
+                                   color='encounter_count', color_continuous_scale=COLOR_SCALE)
+                        fig.update_layout(height=300, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
+                        st.plotly_chart(fig, use_container_width=True)
+    
+    # Tab 3: Site Characteristics
+    with chart_tabs[2]:
+        site_col1, site_col2, site_col3 = st.columns(3)
+        
+        with site_col1:
+            if dimensions.get('urban_rural'):
+                urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
+                if not urban_rural_df.empty and 'location_type' in urban_rural_df.columns and 'patient_count' in urban_rural_df.columns:
+                    show_data = st.checkbox("Show data table", key="urban_rural_data_toggle")
+                    if show_data:
                         st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
-            with data_col2:
-                if dimensions.get('teaching'):
-                    teaching_df = pd.DataFrame(dimensions['teaching'])
-                    if not teaching_df.empty:
-                        st.markdown("**Teaching Status**")
+                    else:
+                        fig = go.Figure(data=[go.Pie(
+                            labels=urban_rural_df['location_type'], 
+                            values=urban_rural_df['patient_count'], 
+                            hole=0.4,
+                            marker_colors=COLOR_PALETTE[:len(urban_rural_df)]
+                        )])
+                        fig.update_layout(title='Urban/Rural', height=300, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
+                        st.plotly_chart(fig, use_container_width=True)
+        
+        with site_col2:
+            if dimensions.get('teaching'):
+                teaching_df = pd.DataFrame(dimensions['teaching'])
+                if not teaching_df.empty and 'teaching_status' in teaching_df.columns and 'patient_count' in teaching_df.columns:
+                    show_data = st.checkbox("Show data table", key="teaching_data_toggle")
+                    if show_data:
                         st.dataframe(teaching_df, use_container_width=True, hide_index=True)
-            with data_col3:
-                if dimensions.get('bed_count'):
-                    bed_count_df = pd.DataFrame(dimensions['bed_count'])
-                    if not bed_count_df.empty:
-                        st.markdown("**Bed Count**")
+                    else:
+                        fig = go.Figure(data=[go.Pie(
+                            labels=teaching_df['teaching_status'], 
+                            values=teaching_df['patient_count'], 
+                            hole=0.4,
+                            marker_colors=COLOR_PALETTE[:len(teaching_df)]
+                        )])
+                        fig.update_layout(title='Teaching Status', height=300, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
+                        st.plotly_chart(fig, use_container_width=True)
+        
+        with site_col3:
+            if dimensions.get('bed_count'):
+                bed_count_df = pd.DataFrame(dimensions['bed_count'])
+                if not bed_count_df.empty and 'bed_count_group' in bed_count_df.columns and 'patient_count' in bed_count_df.columns:
+                    show_data = st.checkbox("Show data table", key="bed_count_data_toggle")
+                    if show_data:
                         st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
+                    else:
+                        fig = px.bar(bed_count_df, x='bed_count_group', y='patient_count', title='Bed Count Groups',
+                                   labels={'patient_count': 'Count', 'bed_count_group': 'Bed Count'}, 
+                                   color='patient_count', color_continuous_scale=COLOR_SCALE)
+                        fig.update_layout(height=300, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
+                        st.plotly_chart(fig, use_container_width=True)
 
 
 def display_dimension_results(results: dict):
