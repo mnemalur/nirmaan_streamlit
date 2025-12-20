@@ -980,7 +980,7 @@ def process_query_conversational(query: str):
                                             if selection_key not in st.session_state:
                                                 st.session_state[selection_key] = []
                                             st.session_state[selection_key].append(code_value)
-                        else:
+                                    else:
                                         # Remove from selection
                                         if code_value in st.session_state.get(selection_key, []):
                                             st.session_state[selection_key].remove(code_value)
