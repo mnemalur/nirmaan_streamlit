@@ -617,6 +617,7 @@ class CohortAgent:
             state["sql"] = result.get('sql')
             state["cohort_count"] = result.get('row_count', 0)
             state["genie_data"] = result.get('data', [])  # Store data returned by Genie
+            state["genie_columns"] = result.get('columns', [])  # Store column names from Genie
             
             if state["sql"]:
                 reasoning.append(("SQL Generated", f"Genie generated SQL query ({len(state['sql'])} characters)"))
@@ -647,39 +648,62 @@ class CohortAgent:
                 reasoning.append(("Counts", "No SQL available, counts unavailable"))
             else:
                 # Check if Genie returned count results (single row with patient_count, visit_count, site_count)
+                genie_columns = state.get("genie_columns", [])
+                is_count_result = False
+                
+                # Check if this looks like a count result: single row with count-related column names
                 if genie_data and len(genie_data) == 1:
+                    # Check column names to see if this is a count result
+                    column_names = [col.lower() if isinstance(col, str) else str(col).lower() for col in genie_columns] if genie_columns else []
+                    has_count_columns = any(keyword in ' '.join(column_names) for keyword in ['patient_count', 'visit_count', 'site_count', 'count'])
+                    
                     row = genie_data[0]
-                    # Check if it's a count result (has count columns)
                     if isinstance(row, dict):
-                        patient_count = row.get("patient_count") or row.get("patients") or 0
-                        visit_count = row.get("visit_count") or row.get("visits") or row.get("encounter_count") or 0
-                        site_count = row.get("site_count") or row.get("sites") or row.get("provider_count") or 0
+                        # Try to extract count values - check multiple possible column name variations
+                        # Case-insensitive matching for column names
+                        patient_count = 0
+                        visit_count = 0
+                        site_count = 0
                         
-                        if patient_count > 0 or visit_count > 0 or site_count > 0:
+                        # Try exact matches first
+                        for key, value in row.items():
+                            key_lower = key.lower()
+                            if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
+                                patient_count = value if value else 0
+                            elif 'visit' in key_lower and ('count' in key_lower or key_lower == 'visits' or 'encounter' in key_lower):
+                                visit_count = value if value else 0
+                            elif 'site' in key_lower and ('count' in key_lower or key_lower == 'sites' or 'provider' in key_lower):
+                                site_count = value if value else 0
+                        
+                        # If we found at least one count, use these values
+                        if patient_count > 0 or visit_count > 0 or site_count > 0 or has_count_columns:
                             state["counts"] = {
-                                "patients": int(patient_count),
-                                "visits": int(visit_count),
-                                "sites": int(site_count)
+                                "patients": int(patient_count) if patient_count else 0,
+                                "visits": int(visit_count) if visit_count else 0,
+                                "sites": int(site_count) if site_count else 0
                             }
+                            logger.info(f"Extracted counts from Genie: patients={patient_count}, visits={visit_count}, sites={site_count}")
+                            logger.info(f"Genie columns: {genie_columns}, Row keys: {list(row.keys()) if isinstance(row, dict) else 'N/A'}")
                             reasoning.append(("Counts", f"Found {patient_count} patients, {visit_count} visits, {site_count} sites"))
                         else:
-                            # Fallback to row_count if count columns not found
-                            row_count = state.get("cohort_count", 0)
+                            # Fallback: if single row but no count columns found, log for debugging
+                            logger.warning(f"Single row returned but couldn't extract counts. Columns: {genie_columns}, Row keys: {list(row.keys()) if isinstance(row, dict) else 'N/A'}")
+                            # Don't use row_count (which would be 1) - this is misleading
                             state["counts"] = {
-                                "patients": row_count,
+                                "patients": 0,
                                 "visits": 0,
                                 "sites": 0
                             }
-                            reasoning.append(("Counts", f"Found {row_count} patients (using row count)"))
+                            reasoning.append(("Counts", "Could not extract counts from Genie result - check SQL/logs"))
                     else:
-                        # Not a dict, use row_count
-                        row_count = state.get("cohort_count", 0)
+                        # Not a dict, can't extract counts
+                        logger.warning(f"Genie returned single row but it's not a dict: {type(row)}")
                         state["counts"] = {
-                            "patients": row_count,
+                            "patients": 0,
                             "visits": 0,
                             "sites": 0
                         }
-                        reasoning.append(("Counts", f"Found {row_count} patients (using row count)"))
+                        reasoning.append(("Counts", "Could not extract counts - unexpected data format"))
                 else:
                     # Genie returned patient-level data - need to calculate distinct counts
                     # Try to extract distinct counts from the data
