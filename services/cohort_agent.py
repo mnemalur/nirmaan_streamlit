@@ -113,6 +113,8 @@ class CohortAgent:
     def _classify_query(self, state: AgentState) -> AgentState:
         """Classify the user query to determine next action"""
         query = state.get("user_query", "").lower()
+        # Normalize query: replace underscores and multiple spaces with single space
+        query = query.replace("_", " ").replace("  ", " ").strip()
         waiting_for = state.get("waiting_for")
         
         # If we're waiting for code search confirmation
@@ -133,7 +135,8 @@ class CohortAgent:
             use_all_phrases = [
                 "use all", "select all", "all codes", "all of them", "all", 
                 "use all codes", "take all", "include all", "yes use all",
-                "proceed with all", "all of these", "use them all"
+                "proceed with all", "all of these", "use them all",
+                "use_all", "useall", "selectall"  # Handle variations with underscores/no spaces
             ]
             if any(phrase in query for phrase in use_all_phrases):
                 state["code_selection_mode"] = "all"
@@ -442,17 +445,20 @@ class CohortAgent:
         all_codes = state.get("codes", [])
         
         try:
+            # Add friendly acknowledgment to reasoning
+            reasoning.append(("Acknowledge Selection", "Accounting for your code selection..."))
+            
             if mode == "all":
                 # User wants to use all codes
                 state["selected_codes"] = all_codes
-                reasoning.append(("Code Selection", f"Using all {len(all_codes)} codes"))
+                reasoning.append(("Code Selection", f"Using all {len(all_codes)} codes you selected"))
             elif mode == "selected":
                 # User selected specific codes from UI
                 # Check if selected_codes are already in state (from UI)
                 pre_selected = state.get("selected_codes", [])
                 if pre_selected:
                     state["selected_codes"] = pre_selected
-                    reasoning.append(("Code Selection", f"Using {len(pre_selected)} selected codes from UI"))
+                    reasoning.append(("Code Selection", f"Using {len(pre_selected)} selected codes from your choices"))
                 else:
                     # Fallback: use all codes if nothing selected
                     state["selected_codes"] = all_codes
@@ -463,6 +469,7 @@ class CohortAgent:
                 state["selected_codes"] = all_codes
                 reasoning.append(("Code Selection", f"Using codes with exclusions applied"))
             
+            reasoning.append(("Next Step", "Now finding matching patients with your selected codes..."))
             state["reasoning_steps"] = reasoning
             return state
         except Exception as e:

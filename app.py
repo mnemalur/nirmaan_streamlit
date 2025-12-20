@@ -783,8 +783,11 @@ def process_query_conversational(query: str):
                 if reasoning_steps:
                     msg_idx = len(st.session_state.messages)
                     # Show reasoning steps expanded during processing to avoid black box feeling
-                    is_processing = (result_state.get("waiting_for") is None and 
-                                   result_state.get("current_step") not in ["error", "new_cohort", "code_selection"])
+                    # Expand if we're processing (not waiting for user input) or if we just processed code selection
+                    current_step = result_state.get("current_step", "")
+                    waiting_for = result_state.get("waiting_for")
+                    is_processing = (waiting_for is None and 
+                                   current_step not in ["error", "new_cohort"]) or current_step == "code_selection"
                     with st.expander("🔍 What I'm doing (reasoning steps)", expanded=is_processing):
                         for step_name, description in reasoning_steps:
                             st.markdown(f"**{step_name}**: {description}")
@@ -829,12 +832,21 @@ def process_query_conversational(query: str):
                 waiting_for = result_state.get("waiting_for")
                 response_text = ""  # Initialize to avoid UnboundLocalError
                 
-                # Check if we just processed code selection - show clear messaging
+                # Check if we just processed code selection - show clear acknowledgment and next steps
                 if current_step == "code_selection" and not waiting_for:
-                    # User just selected codes, show what we're doing next
+                    # User just selected codes, show friendly acknowledgment
                     selected_count = len(result_state.get("selected_codes", []))
-                    response_parts.append(f"Perfect! I'll update the criteria with the {selected_count} code(s) you selected and find matching patients.")
-                    response_parts.append("\nLet me process this for you...")
+                    mode = result_state.get("code_selection_mode", "all")
+                    
+                    if mode == "all":
+                        response_parts.append(f"✅ **Perfect!** I'll use all {selected_count} code(s) you selected.")
+                    elif mode == "selected":
+                        response_parts.append(f"✅ **Got it!** I'll use the {selected_count} code(s) you selected.")
+                    else:
+                        response_parts.append(f"✅ **Understood!** I'll account for your selection ({selected_count} code(s)).")
+                    
+                    response_parts.append("\n🔍 **Let me find matching patients for you...**")
+                    response_parts.append("\n*(Check the reasoning steps below to see what I'm doing)*")
                     response_text = "\n".join(response_parts)
                 
                 # Check if we're waiting for code search confirmation
@@ -899,36 +911,8 @@ def process_query_conversational(query: str):
                         if selection_key not in st.session_state:
                             st.session_state[selection_key] = [c.get('code') for c in codes if c.get('code')]
                         
-                        # Show prominent action buttons OUTSIDE the response text
-                        msg_idx = len(st.session_state.messages)
-                        
-                        # Clear call-to-action with instructions
-                        st.info("👆 **Choose how you'd like to proceed with these codes:**\n\n"
-                               "**Option 1:** Click one of the buttons below\n"
-                               "**Option 2:** Type your response in the chat (e.g., 'use all', 'select codes', 'I want codes X, Y, Z')")
-                        
-                        # Action buttons in a prominent row
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            if st.button("✅ **Use All Codes**", key=f"use_all_{msg_idx}", type="primary", use_container_width=True):
-                                st.session_state.selected_codes = codes
-                                process_query_conversational("use all")
-                                st.rerun()
-                        with col2:
-                            if st.button("📋 **Select Specific Codes**", key=f"select_specific_{msg_idx}", use_container_width=True):
-                                # Toggle selection mode - show checkboxes
-                                st.session_state[f"show_selection_{msg_idx}"] = True
-                                st.rerun()
-                        with col3:
-                            if st.button("🚫 **Exclude Some**", key=f"exclude_{msg_idx}", use_container_width=True):
-                                # Show exclude UI
-                                st.session_state[f"show_exclude_{msg_idx}"] = True
-                                st.rerun()
-                        with col4:
-                            selected_count = len(st.session_state.get(selection_key, []))
-                            st.metric("**Selected**", f"{selected_count}/{len(codes)}")
-                        
-                        st.markdown("---")
+                        # Don't add buttons here - they'll be added after the message is displayed
+                        # This ensures buttons are always visible
                         
                         # Show codes table and selection UI
                         code_df = pd.DataFrame(codes)
@@ -1020,11 +1004,12 @@ def process_query_conversational(query: str):
                     visits = counts.get("visits", 0)
                     sites = counts.get("sites", 0)
                     
-                    response_parts.append("✅ **Query completed!** Here are the results:")
+                    response_parts.append("🎉 **Great! I found matching patients for your criteria.**")
                     response_parts.append("")
                     
                     if patients > 0:
-                        # Show counts in a prominent way with metrics
+                        # Show counts in a prominent way with metrics (displayed before text)
+                        st.markdown("### 📊 Patient Counts")
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("**Patients**", f"{patients:,}")
@@ -1039,7 +1024,7 @@ def process_query_conversational(query: str):
                             else:
                                 st.metric("**Sites**", "N/A")
                         
-                        response_parts.append(f"Found **{patients:,} patients**")
+                        response_parts.append(f"✅ Found **{patients:,} patients**")
                         if visits > 0:
                             response_parts.append(f"across **{visits:,} visits**")
                         if sites > 0:
@@ -1055,9 +1040,9 @@ def process_query_conversational(query: str):
                             st.code(sql, language="sql")
                     
                     # Ask about next steps conversationally
-                    response_parts.append("\n\n**What would you like to do next?**")
-                    response_parts.append("- Explore this cohort further (demographics, trends, outcomes)")
-                    response_parts.append("- Adjust your criteria to refine the results")
+                    response_parts.append("\n\n💬 **What would you like to do next?**")
+                    response_parts.append("- **Explore this cohort** further (demographics, trends, outcomes)")
+                    response_parts.append("- **Adjust your criteria** to refine the results")
                     response_text = "\n".join(response_parts)
                 
                 elif current_step == "new_cohort":
@@ -1146,6 +1131,41 @@ def process_query_conversational(query: str):
                 
                 # Display main response
                 st.markdown(response_text)
+                
+                # If we're waiting for code selection, show buttons AFTER the message (so they're always visible)
+                if waiting_for == "code_selection":
+                    codes = result_state.get("codes", [])
+                    if codes:
+                        selection_key = f"code_selection_{st.session_state.session_id}"
+                        msg_idx = len(st.session_state.messages)
+                        
+                        # Clear call-to-action with instructions
+                        st.info("👆 **Choose how you'd like to proceed with these codes:**\n\n"
+                               "**Option 1:** Click one of the buttons below\n"
+                               "**Option 2:** Type your response in the chat (e.g., 'use all', 'select codes', 'I want codes X, Y, Z')")
+                        
+                        # Action buttons in a prominent row
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            if st.button("✅ **Use All Codes**", key=f"use_all_{msg_idx}", type="primary", use_container_width=True):
+                                st.session_state.selected_codes = codes
+                                process_query_conversational("use all")
+                                st.rerun()
+                        with col2:
+                            if st.button("📋 **Select Specific Codes**", key=f"select_specific_{msg_idx}", use_container_width=True):
+                                # Toggle selection mode - show checkboxes
+                                st.session_state[f"show_selection_{msg_idx}"] = True
+                                st.rerun()
+                        with col3:
+                            if st.button("🚫 **Exclude Some**", key=f"exclude_{msg_idx}", use_container_width=True):
+                                # Show exclude UI
+                                st.session_state[f"show_exclude_{msg_idx}"] = True
+                                st.rerun()
+                        with col4:
+                            selected_count = len(st.session_state.get(selection_key, []))
+                            st.metric("**Selected**", f"{selected_count}/{len(codes)}")
+                        
+                        st.markdown("---")
                 
                 # Add to message history
                 st.session_state.messages.append({
