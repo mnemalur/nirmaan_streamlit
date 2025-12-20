@@ -873,17 +873,75 @@ def process_query_conversational(query: str):
                     if codes:
                         response_parts.append(f"I found **{len(codes)} relevant clinical codes**.")
                         
-                        # Show codes in expandable section
+                        # Initialize selected codes in session state if not exists
+                        selection_key = f"code_selection_{st.session_state.session_id}"
+                        if selection_key not in st.session_state:
+                            st.session_state[selection_key] = [c.get('code') for c in codes]
+                        
+                        # Show codes with interactive selection
                         msg_idx = len(st.session_state.messages)
-                        with st.expander(f"📋 View {len(codes)} Codes Found", expanded=False):
+                        with st.expander(f"📋 Select Codes ({len(codes)} found)", expanded=True):
                             code_df = pd.DataFrame(codes)
                             display_cols = ['code', 'description', 'vocabulary']
                             available_cols = [col for col in display_cols if col in code_df.columns]
+                            
                             if available_cols:
-                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                                # Add checkbox column
+                                selected_codes_list = st.session_state.get(selection_key, [])
+                                
+                                # Quick action buttons
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    if st.button("✅ Select All", key=f"select_all_{msg_idx}"):
+                                        st.session_state[selection_key] = [c.get('code') for c in codes if c.get('code')]
+                                        st.rerun()
+                                with col2:
+                                    if st.button("❌ Deselect All", key=f"deselect_all_{msg_idx}"):
+                                        st.session_state[selection_key] = []
+                                        st.rerun()
+                                with col3:
+                                    if st.button("🚀 Use Selected", key=f"use_selected_{msg_idx}"):
+                                        # Process selected codes
+                                        selected_codes = [c for c in codes if c.get('code') in st.session_state.get(selection_key, [])]
+                                        if selected_codes:
+                                            # Update agent state and proceed
+                                            st.session_state.selected_codes = selected_codes
+                                            # Trigger code confirmation
+                                            process_query_conversational("use selected codes")
+                                            st.rerun()
+                                        else:
+                                            st.warning("Please select at least one code")
+                                
+                                st.markdown("---")
+                                
+                                # Show codes with checkboxes
+                                for idx, code_row in code_df.iterrows():
+                                    code_value = code_row.get('code', '')
+                                    if not code_value:
+                                        continue
+                                    
+                                    is_selected = code_value in st.session_state.get(selection_key, [])
+                                    checkbox_key = f"code_checkbox_{msg_idx}_{idx}_{code_value}"
+                                    
+                                    checkbox_label = f"**{code_value}** - {code_row.get('description', 'N/A')} ({code_row.get('vocabulary', 'N/A')})"
+                                    
+                                    if st.checkbox(checkbox_label, value=is_selected, key=checkbox_key):
+                                        # Add to selection
+                                        if code_value not in st.session_state.get(selection_key, []):
+                                            if selection_key not in st.session_state:
+                                                st.session_state[selection_key] = []
+                                            st.session_state[selection_key].append(code_value)
+                                    else:
+                                        # Remove from selection
+                                        if code_value in st.session_state.get(selection_key, []):
+                                            st.session_state[selection_key].remove(code_value)
+                                
+                                # Show selection count
+                                selected_count = len(st.session_state.get(selection_key, []))
+                                st.info(f"📊 {selected_count} of {len(codes)} codes selected")
                         
                         # Ask about code selection conversationally
-                        response_parts.append("\n\n**Would you like to use all codes, select specific codes, or exclude certain conditions?**")
+                        response_parts.append("\n\n**Select codes above, then click 'Use Selected', or say 'use all' to use all codes.**")
                     else:
                         # No codes found
                         response_parts.append("I searched for codes but didn't find any matching results.")

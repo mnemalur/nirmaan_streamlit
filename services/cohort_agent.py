@@ -135,12 +135,16 @@ class CohortAgent:
                 state["current_step"] = "code_selection"
                 state["waiting_for"] = None
                 return state
-            elif any(phrase in query for phrase in ["i want to select", "select", "choose", "i want"]):
+            elif any(phrase in query for phrase in ["use selected", "use selected codes", "selected codes"]):
+                # User confirmed selection from UI
                 state["code_selection_mode"] = "selected"
                 state["current_step"] = "code_selection"
                 state["waiting_for"] = None
-                # Try to extract specific codes from query
-                # This is simplified - could be enhanced with NLP
+                return state
+            elif any(phrase in query for phrase in ["i want to select", "select codes", "choose codes"]):
+                # User wants to select - keep waiting_for as code_selection to show UI
+                # Don't change waiting_for, just return to show selection UI
+                state["current_step"] = "code_selection"
                 return state
             elif any(phrase in query for phrase in ["exclude", "remove", "don't include", "without"]):
                 state["code_selection_mode"] = "excluded"
