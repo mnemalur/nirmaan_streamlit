@@ -39,16 +39,19 @@ class AgentState(TypedDict, total=False):
     sql: str
     answer_data: dict
     reasoning_steps: list  # List of (step_name, description) tuples for transparency
+    dimension_results: dict  # Results from dimension analysis
+    refined_criteria: dict  # Refined criteria when user wants to adjust
 
 
 class CohortAgent:
     """Conversational agent for cohort building using LangGraph"""
     
-    def __init__(self, vector_service, genie_service, cohort_manager, intent_service=None):
+    def __init__(self, vector_service, genie_service, cohort_manager, intent_service=None, dimension_service=None):
         self.vector_service = vector_service
         self.genie_service = genie_service
         self.cohort_manager = cohort_manager
         self.intent_service = intent_service
+        self.dimension_service = dimension_service
         self.graph = self._build_graph()
     
     def _build_graph(self) -> StateGraph:
@@ -65,6 +68,8 @@ class CohortAgent:
         workflow.add_node("generate_sql", self._generate_sql)
         workflow.add_node("get_counts", self._get_counts)  # New: Get patients, visits, sites counts
         workflow.add_node("ask_for_analysis", self._ask_for_analysis)  # New: Ask about analysis
+        workflow.add_node("refine_criteria", self._refine_criteria)  # New: Handle criteria refinement
+        workflow.add_node("explore_cohort", self._explore_cohort)  # New: Materialize cohort and run dimension analysis
         workflow.add_node("materialize_cohort", self._materialize_cohort)
         workflow.add_node("answer_question", self._answer_question)
         workflow.add_node("handle_error", self._handle_error)
@@ -80,8 +85,8 @@ class CohortAgent:
                 "new_cohort": "interpret_intent",
                 "search_codes": "search_codes",  # User confirmed code search
                 "code_selection": "confirm_codes",  # User responding to code selection
-                "analysis": "ask_for_analysis",  # User wants to analyze
-                "refine": "interpret_intent",  # User wants to refine - start over
+                "analysis": "explore_cohort",  # User wants to analyze - go to explore_cohort
+                "refine": "refine_criteria",  # User wants to refine - go to refine_criteria
                 "follow_up": "answer_question",
                 "insights": "answer_question",
                 "error": "handle_error"
@@ -101,8 +106,15 @@ class CohortAgent:
         workflow.add_edge("generate_sql", "get_counts")
         workflow.add_edge("get_counts", END)  # STOP here - ask user about analysis
         
-        # User wants analysis → go to analysis
+        # User wants analysis → go to analysis (handled by routing to explore_cohort)
         workflow.add_edge("ask_for_analysis", END)
+        
+        # Refine criteria → restart flow with refined criteria
+        workflow.add_edge("refine_criteria", "interpret_intent")
+        
+        # Explore cohort → END (shows dimension results)
+        workflow.add_edge("explore_cohort", END)
+        
         # Full auto-flow (commented for now - user controls execution):
         # workflow.add_edge("generate_sql", "materialize_cohort")
         # workflow.add_edge("materialize_cohort", END)
@@ -890,6 +902,163 @@ class CohortAgent:
         state["reasoning_steps"] = reasoning
         state["waiting_for"] = None  # Analysis decision handled
         return state
+    
+    def _refine_criteria(self, state: AgentState) -> AgentState:
+        """
+        Handle criteria refinement when user wants to adjust their criteria.
+        Captures user input and builds refined criteria to restart the flow.
+        """
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Refine Criteria", "Processing user's refinement request"))
+        state["reasoning_steps"] = reasoning
+        
+        user_query = state.get("user_query", "")
+        existing_criteria = state.get("criteria_analysis", {})
+        selected_codes = state.get("selected_codes", [])
+        
+        try:
+            # Use intent_service to understand what user wants to change
+            if self.intent_service:
+                # Build a prompt to understand refinement intent
+                refinement_prompt = f"""
+The user wants to refine their cohort criteria. 
+
+Original criteria: {existing_criteria.get('summary', '')}
+Current conditions: {', '.join(existing_criteria.get('conditions', []))}
+User's refinement request: {user_query}
+
+Extract what the user wants to change:
+- If they say "too many patients" or "too high" → they want more restrictive filters
+- If they mention specific filters (age, gender, etc.) → extract those requirements
+- If they say "exclude X" → add exclusion
+- If they say "more specific" → narrow down conditions
+
+Return a refined criteria summary that combines the original criteria with the user's refinement.
+"""
+                
+                # Use LLM to build refined criteria
+                from langchain_core.prompts import ChatPromptTemplate
+                prompt = ChatPromptTemplate.from_template(refinement_prompt)
+                chain = prompt | self.intent_service.llm
+                response = chain.invoke({})
+                refined_summary = response.content if hasattr(response, "content") else str(response)
+                
+                # Build refined criteria structure
+                refined_criteria = {
+                    "original_summary": existing_criteria.get('summary', ''),
+                    "refinement_input": user_query,
+                    "refined_summary": refined_summary.strip(),
+                    "conditions": existing_criteria.get('conditions', []),
+                    "selected_codes": selected_codes,
+                    "demographics": existing_criteria.get('demographics', []),
+                    "timeframe": existing_criteria.get('timeframe', '')
+                }
+                
+                state["refined_criteria"] = refined_criteria
+                # Update criteria_analysis with refined version
+                state["criteria_analysis"] = {
+                    **existing_criteria,
+                    "summary": refined_summary.strip()
+                }
+                # Update user_query to the refined summary so interpret_intent can process it
+                state["user_query"] = refined_summary.strip()
+                
+                reasoning.append(("Refined Criteria", f"Built refined criteria: {refined_summary[:100]}..."))
+            else:
+                # Fallback: just use user query as refinement
+                state["refined_criteria"] = {
+                    "original_summary": existing_criteria.get('summary', ''),
+                    "refinement_input": user_query,
+                    "refined_summary": user_query
+                }
+                state["user_query"] = user_query
+                reasoning.append(("Refined Criteria", "Using user query directly as refinement"))
+            
+            # Reset to restart flow with refined criteria
+            state["waiting_for"] = None
+            state["current_step"] = "new_cohort"
+            state["reasoning_steps"] = reasoning
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Error in refine_criteria: {str(e)}")
+            state["error"] = f"Error refining criteria: {str(e)}"
+            state["current_step"] = "error"
+            return state
+    
+    def _explore_cohort(self, state: AgentState) -> AgentState:
+        """
+        Materialize cohort table (if not exists) and run dimension analysis.
+        This is called when user wants to explore the cohort.
+        """
+        reasoning = state.get("reasoning_steps", [])
+        reasoning.append(("Explore Cohort", "Starting cohort exploration - materializing and analyzing dimensions"))
+        state["reasoning_steps"] = reasoning
+        
+        try:
+            # Check if cohort table already exists
+            cohort_table = state.get("cohort_table")
+            sql = state.get("sql")
+            session_id = state.get("session_id", "default")
+            
+            # If cohort table doesn't exist, materialize it
+            if not cohort_table:
+                if not sql:
+                    state["error"] = "No SQL available to materialize cohort. Please generate SQL first."
+                    state["current_step"] = "error"
+                    return state
+                
+                reasoning.append(("Materialize Cohort", "Creating cohort table from SQL"))
+                logger.info(f"Materializing cohort for session {session_id}")
+                
+                # Use cohort_manager to materialize
+                cohort_result = self.cohort_manager.materialize_cohort(session_id, sql)
+                cohort_table = cohort_result['cohort_table']
+                state["cohort_table"] = cohort_table
+                state["cohort_count"] = cohort_result.get('count', 0)
+                
+                reasoning.append(("Materialize Cohort", f"Cohort table created: {cohort_table} with {cohort_result.get('count', 0)} rows"))
+                logger.info(f"Cohort materialized: {cohort_table} with {cohort_result.get('count', 0)} rows")
+            else:
+                reasoning.append(("Materialize Cohort", f"Using existing cohort table: {cohort_table}"))
+                logger.info(f"Using existing cohort table: {cohort_table}")
+            
+            # Now run dimension analysis
+            if not self.dimension_service:
+                state["error"] = "Dimension analysis service not available"
+                state["current_step"] = "error"
+                return state
+            
+            reasoning.append(("Dimension Analysis", "Starting dimension analysis"))
+            logger.info(f"Running dimension analysis on {cohort_table}")
+            
+            # Detect cohort structure from SQL
+            has_medrec_key, has_pat_key = self.dimension_service.detect_cohort_structure(sql)
+            
+            # Run dimension analysis
+            dimension_results = self.dimension_service.analyze_dimensions(
+                cohort_table=cohort_table,
+                has_medrec_key=has_medrec_key,
+                use_dynamic=True
+            )
+            
+            state["dimension_results"] = dimension_results
+            state["current_step"] = "analysis"
+            state["waiting_for"] = None
+            
+            reasoning.append(("Dimension Analysis", f"Completed analysis for {len(dimension_results.get('dimensions', {}))} dimensions"))
+            state["reasoning_steps"] = reasoning
+            
+            logger.info(f"Dimension analysis completed. Dimensions: {list(dimension_results.get('dimensions', {}).keys())}")
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Error in explore_cohort: {str(e)}", exc_info=True)
+            state["error"] = f"Error exploring cohort: {str(e)}"
+            state["current_step"] = "error"
+            return state
     
     def _materialize_cohort(self, state: AgentState) -> AgentState:
         """Materialize the cohort in Delta table"""

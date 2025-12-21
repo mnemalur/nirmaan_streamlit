@@ -208,12 +208,13 @@ def initialize_services():
             logger.warning(f"Could not pre-discover schema: {str(e)}")
             # Non-critical, dimension analysis will discover schema on-demand
         
-        # Initialize LangGraph agent (LLM + vector search + Genie + cohort manager)
+        # Initialize LangGraph agent (LLM + vector search + Genie + cohort manager + dimension service)
         st.session_state.cohort_agent = CohortAgent(
             st.session_state.vector_service,
             st.session_state.genie_service,
             st.session_state.cohort_manager,
-            st.session_state.intent_service
+            st.session_state.intent_service,
+            st.session_state.dimension_service
         )
         
         st.session_state.services_initialized = True
@@ -701,7 +702,8 @@ def render_chat_page():
                 vector_service=st.session_state.vector_service,
                 genie_service=st.session_state.genie_service,
                 cohort_manager=st.session_state.cohort_manager,
-                intent_service=st.session_state.intent_service
+                intent_service=st.session_state.intent_service,
+                dimension_service=st.session_state.dimension_service if hasattr(st.session_state, 'dimension_service') else None
             )
         except Exception as e:
             st.error(f"Failed to initialize cohort agent: {str(e)}")
