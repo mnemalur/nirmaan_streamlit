@@ -925,17 +925,30 @@ def process_query_conversational(query: str):
                 
                 # Check if we're waiting for analysis decision
                 elif waiting_for == "analysis_decision":
-                    # Show counts prominently
+                    # CRITICAL: Show counts from Genie SQL execution - users need these to assess criteria
                     raw_count_data = result_state.get("raw_count_data")
+                    
+                    # Validate we have the actual Genie execution result
+                    if not raw_count_data:
+                        logger.warning("⚠️ CRITICAL: No raw_count_data available - cannot show counts from Genie SQL execution!")
+                        genie_data = result_state.get("genie_data", [])
+                        if genie_data:
+                            logger.info(f"🔍 CRITICAL: Found genie_data directly: {len(genie_data)} row(s)")
                     
                     response_parts.append("🎉 **Great! I found matching patients for your criteria.**")
                     response_parts.append("")
+                    response_parts.append("📊 **Below are the counts from the executed SQL query. Use these to assess if you need to adjust your criteria.**")
+                    response_parts.append("")
                     
                     # Initialize counts from raw data - extract directly from dataframe
-                    # DO NOT use counts dict - it might have wrong values (like row_count = 1)
-                    patients = 0
-                    visits = 0
-                    sites = 0
+                    # First try to use counts from state (extracted in _get_counts)
+                    counts_from_state = result_state.get("counts", {})
+                    patients = counts_from_state.get("patients", 0)
+                    visits = counts_from_state.get("visits", 0)
+                    sites = counts_from_state.get("sites", 0)
+                    
+                    # If counts are 0 or 1 (likely wrong), we'll re-extract from raw_count_data below
+                    need_re_extraction = (patients <= 1 and visits == 0 and sites == 0)
                     
                     # Debug logging
                     logger.info(f"🔍 DEBUG: raw_count_data exists: {raw_count_data is not None}")
@@ -950,11 +963,18 @@ def process_query_conversational(query: str):
                         columns = raw_count_data.get("columns", [])
                         
                         if isinstance(row, dict) and row:
-                            # Display the count row as a dataframe FIRST - transparent and reliable
-                            # Make it prominent and always visible (not in expander)
-                            st.markdown("### 📊 Cohort Summary - Count Results from Genie")
+                            # Re-extract if we need to (counts from state were 0 or 1)
+                            if need_re_extraction:
+                                logger.info(f"🔍 Re-extracting counts from raw_count_data (state had patients={patients})")
+                                patients = 0
+                                visits = 0
+                                sites = 0
+                            # CRITICAL: Display the ACTUAL Genie SQL execution result FIRST
+                            # This is the source of truth - users need to see this to assess criteria
+                            st.markdown("### 📊 SQL Execution Results (Source of Truth)")
+                            st.info("💡 **These are the actual counts from the executed SQL query. Use these to assess if you need to adjust your criteria.**")
                             count_df = pd.DataFrame([row])
-                            # Show dataframe prominently - similar to how codes are shown
+                            # Show dataframe prominently - users must see the raw data
                             st.dataframe(count_df, use_container_width=True, hide_index=True)
                             st.markdown("---")  # Separator
                             
@@ -1181,6 +1201,46 @@ def process_query_conversational(query: str):
                 # Display main response
                 st.markdown(response_text)
                 
+                # Get patient count - prefer extracted value from raw_count_data if available
+                patient_count_for_message = result_state.get("cohort_count", 0)
+                
+                # If cohort_count is 0 or 1 (likely wrong), try to extract from raw_count_data
+                if patient_count_for_message <= 1:
+                    raw_count_data = result_state.get("raw_count_data")
+                    if raw_count_data:
+                        row = raw_count_data.get("row", {})
+                        if isinstance(row, dict):
+                            # Try to extract patient count from row
+                            for key, value in row.items():
+                                key_lower = str(key).lower()
+                                try:
+                                    if value is not None:
+                                        num_val = int(float(str(value)))
+                                        if num_val > 1:  # Skip values of 0 or 1
+                                            if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
+                                                patient_count_for_message = num_val
+                                                logger.info(f"🔍 Updated patient_count from raw_count_data: {num_val}")
+                                                break
+                                except (ValueError, TypeError):
+                                    pass
+                            
+                            # If still 0 or 1, use largest numeric value as fallback
+                            if patient_count_for_message <= 1:
+                                numeric_values = []
+                                for key, value in row.items():
+                                    try:
+                                        if value is not None:
+                                            num_val = int(float(str(value)))
+                                            if num_val > 1:  # Skip values of 0 or 1
+                                                numeric_values.append((key, num_val))
+                                    except (ValueError, TypeError):
+                                        pass
+                                
+                                if numeric_values:
+                                    numeric_values.sort(key=lambda x: x[1], reverse=True)
+                                    patient_count_for_message = numeric_values[0][1]
+                                    logger.info(f"🔍 Used fallback numeric value for patient_count: {patient_count_for_message}")
+                
                 # Add to message history
                 st.session_state.messages.append({
                     "role": "assistant",
@@ -1188,7 +1248,7 @@ def process_query_conversational(query: str):
                     "data": {
                         "codes": result_state.get("codes", []),
                         "sql": result_state.get("sql"),
-                        "count": result_state.get("cohort_count", 0),
+                        "count": patient_count_for_message,
                         "genie_prompt": result_state.get("genie_prompt")
                     }
                 })

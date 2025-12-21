@@ -634,44 +634,35 @@ class CohortAgent:
             return state
     
     def _get_counts(self, state: AgentState) -> AgentState:
-        """Get counts (patients, visits, sites) from Genie result"""
+        """Get counts (patients, visits, sites) from Genie result
+        
+        CRITICAL: This extracts counts from the ACTUAL SQL execution results returned by Genie.
+        These counts are used by users to assess criteria and decide if adjustments are needed.
+        """
         reasoning = state.get("reasoning_steps", [])
         reasoning.append(("Execute Query", "Executing SQL query to find matching patients..."))
-        reasoning.append(("Get Counts", "Calculating patient, visit, and site counts..."))
+        reasoning.append(("Get Counts", "Extracting patient, visit, and site counts from Genie SQL execution results..."))
         state["reasoning_steps"] = reasoning
         
         try:
             sql = state.get("sql")
-            genie_data = state.get("genie_data", [])  # Data returned by Genie
+            # CRITICAL: Use the ACTUAL data from Genie's SQL execution - this is the source of truth
+            genie_data = state.get("genie_data", [])  # Data returned by Genie (actual SQL execution result)
+            genie_columns = state.get("genie_columns", [])  # Column names from Genie result
             
-            # Extract column names from SQL if available (Genie uses patient_count, visit_count, site_count)
-            sql_column_names = []
-            if sql:
-                import re
-                # Look for SELECT ... AS patient_count, ... AS visit_count, ... AS site_count
-                # Or just patient_count, visit_count, site_count in SELECT
-                select_match = re.search(r'SELECT\s+(.*?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
-                if select_match:
-                    select_clause = select_match.group(1)
-                    # Find column aliases (AS patient_count, AS visit_count, AS site_count)
-                    as_matches = re.findall(r'AS\s+(\w+_count|\w+count)', select_clause, re.IGNORECASE)
-                    if as_matches:
-                        sql_column_names = [col.lower() for col in as_matches]
-                    # Also check for direct column names
-                    direct_matches = re.findall(r'\b(patient_count|visit_count|site_count)\b', select_clause, re.IGNORECASE)
-                    if direct_matches:
-                        sql_column_names.extend([col.lower() for col in direct_matches])
-                    # Remove duplicates while preserving order
-                    sql_column_names = list(dict.fromkeys(sql_column_names))
-                    logger.info(f"🔍 Extracted column names from SQL: {sql_column_names}")
-            
-            if not sql:
+            # Validate we have the actual Genie result
+            if not genie_data:
+                logger.error("⚠️ CRITICAL: No genie_data available - cannot extract counts from SQL execution results!")
                 state["counts"] = {"patients": 0, "visits": 0, "sites": 0}
                 state["cohort_count"] = 0
-                reasoning.append(("Counts", "No SQL available, counts unavailable"))
-            else:
-                # Check if Genie returned count results (single row with patient_count, visit_count, site_count)
-                genie_columns = state.get("genie_columns", [])
+                reasoning.append(("Counts", "ERROR: No data from Genie SQL execution - cannot determine counts"))
+                state["reasoning_steps"] = reasoning
+                return state
+            
+            logger.info(f"🔍 CRITICAL: Extracting counts from Genie SQL execution result: {len(genie_data)} row(s), columns: {genie_columns}")
+            
+            # Check if Genie returned count results (single row with patient_count, visit_count, site_count)
+            # This is the ACTUAL result from Genie's SQL execution - CRITICAL for user decision-making
                 
                 # Initialize cohort_count to 0 in case we can't extract it
                 state["cohort_count"] = 0
@@ -695,14 +686,34 @@ class CohortAgent:
                     
                     # Store the row data for UI to display - simpler and more transparent
                     if isinstance(row, dict):
-                        logger.info(f"🔍 Genie returned count row: {row}")
-                        logger.info(f"🔍 Columns: {genie_columns}")
+                        logger.info(f"🔍 CRITICAL: Genie SQL execution result row: {row}")
+                        logger.info(f"🔍 CRITICAL: Column names from Genie: {genie_columns}")
+                        logger.info(f"🔍 CRITICAL: Row keys: {list(row.keys())}")
+                        logger.info(f"🔍 CRITICAL: Row values: {row}")
+                        
+                        # CRITICAL VALIDATION: Log what we're about to extract for user decision-making
+                        logger.info(f"🔍 CRITICAL: This is the ACTUAL SQL execution result - counts will be used for user assessment")
                         
                         # Always store raw data for UI to display as dataframe
                         state["raw_count_data"] = {
                             "row": row,
                             "columns": genie_columns
                         }
+                        
+                        # Extract all numeric values first for fallback
+                        numeric_values = []
+                        for key, value in row.items():
+                            try:
+                                if value is not None:
+                                    num_val = int(float(str(value)))
+                                    if num_val > 0:  # Only positive counts
+                                        numeric_values.append((key, num_val))
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # Sort by value (largest first) - patient count is usually largest
+                        numeric_values.sort(key=lambda x: x[1], reverse=True)
+                        logger.info(f"🔍 All numeric values found: {numeric_values}")
                         
                         # Simple extraction - look for common column name patterns
                         patient_count = 0
@@ -714,24 +725,75 @@ class CohortAgent:
                             try:
                                 if value is not None:
                                     num_val = int(float(str(value)))
+                                    # Match patient count - more flexible matching
                                     if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
                                         patient_count = num_val
+                                        logger.info(f"🔍 Found patient_count from column '{key}': {num_val}")
+                                    # Match visit count
                                     elif ('visit' in key_lower or 'encounter' in key_lower) and ('count' in key_lower or key_lower in ['visits', 'encounter_count']):
                                         visit_count = num_val
+                                        logger.info(f"🔍 Found visit_count from column '{key}': {num_val}")
+                                    # Match site count
                                     elif ('site' in key_lower or 'provider' in key_lower) and ('count' in key_lower or key_lower in ['sites', 'provider_count']):
                                         site_count = num_val
+                                        logger.info(f"🔍 Found site_count from column '{key}': {num_val}")
                             except (ValueError, TypeError):
                                 pass
                         
+                        # Fallback: If we didn't find specific matches, use numeric values in order
+                        # BUT: Skip if the only numeric value is 1 (likely row_count, not actual count)
+                        if patient_count == 0 and visit_count == 0 and site_count == 0 and numeric_values:
+                            # Filter out value of 1 (likely row_count, not actual count)
+                            filtered_values = [nv for nv in numeric_values if nv[1] > 1]
+                            if filtered_values:
+                                # Use first 3 filtered numeric values as patients, visits, sites
+                                patient_count = filtered_values[0][1] if len(filtered_values) > 0 else 0
+                                visit_count = filtered_values[1][1] if len(filtered_values) > 1 else 0
+                                site_count = filtered_values[2][1] if len(filtered_values) > 2 else 0
+                                logger.info(f"🔍 Used fallback numeric values: patients={patient_count}, visits={visit_count}, sites={site_count}")
+                            else:
+                                # If all values are 1 or 0, something is wrong - log it
+                                logger.warning(f"🔍 WARNING: All numeric values are 1 or 0: {numeric_values}. This might be row_count, not actual counts!")
+                                # Still try to use the first value if it exists
+                                if numeric_values:
+                                    patient_count = numeric_values[0][1]
+                                    logger.info(f"🔍 Using first numeric value as fallback: {patient_count}")
+                        
+                        # CRITICAL: Store the extracted counts - these are from ACTUAL Genie SQL execution
                         state["counts"] = {
                             "patients": patient_count,
                             "visits": visit_count,
                             "sites": site_count
                         }
-                        # Update cohort_count with the actual patient count (not row count)
-                        state["cohort_count"] = patient_count
-                        logger.info(f"✅ Extracted counts: patients={patient_count}, visits={visit_count}, sites={site_count}")
-                        reasoning.append(("Counts", f"Found {patient_count} patients, {visit_count} visits, {site_count} sites"))
+                        
+                        # CRITICAL: Update cohort_count with the actual patient count from SQL execution
+                        # This is what users will see to assess their criteria
+                        if patient_count > 0:
+                            state["cohort_count"] = patient_count
+                            logger.info(f"✅ CRITICAL: Extracted patient_count={patient_count} from Genie SQL execution result")
+                            logger.info(f"✅ CRITICAL: This count will be shown to user for criteria assessment")
+                        elif numeric_values and len(numeric_values) > 0:
+                            # Use the largest numeric value as fallback (already filtered to > 1)
+                            fallback_count = numeric_values[0][1] if numeric_values[0][1] > 1 else 0
+                            if fallback_count > 0:
+                                state["cohort_count"] = fallback_count
+                                patient_count = fallback_count  # Update for consistency
+                                logger.warning(f"⚠️ CRITICAL: Used fallback extraction - patient_count={fallback_count} (column name matching failed)")
+                                logger.warning(f"⚠️ CRITICAL: Row data: {row}, Columns: {genie_columns}")
+                            else:
+                                state["cohort_count"] = 0
+                                logger.error(f"❌ CRITICAL: Could not extract patient count from Genie SQL execution result!")
+                                logger.error(f"❌ CRITICAL: Row: {row}, Columns: {genie_columns}")
+                        else:
+                            # If we couldn't extract, set to 0
+                            state["cohort_count"] = 0
+                            logger.error(f"❌ CRITICAL: Could not extract patient count from Genie SQL execution result!")
+                            logger.error(f"❌ CRITICAL: Row: {row}, Columns: {genie_columns}")
+                        
+                        # CRITICAL: Log final counts that will be shown to user
+                        logger.info(f"✅ CRITICAL: Final counts from Genie SQL execution - patients={patient_count}, visits={visit_count}, sites={site_count}")
+                        logger.info(f"✅ CRITICAL: User will see these counts to assess criteria and decide next steps")
+                        reasoning.append(("Counts", f"Extracted from Genie SQL execution: {patient_count} patients, {visit_count} visits, {site_count} sites"))
                     else:
                         # Not a dict, store as-is
                         logger.warning(f"Genie returned single row but it's not a dict: {type(row)}")
