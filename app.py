@@ -960,9 +960,9 @@ def process_query_conversational(query: str):
                         if genie_data:
                             logger.info(f"🔍 CRITICAL: Found genie_data directly: {len(genie_data)} row(s)")
                     
-                    # Add intro message to response (will be shown in chat message)
-                    response_parts.append("🎉 **Great! I found matching patients for your criteria. Use the counts to assess if you need to adjust your criteria.**")
-                    response_parts.append("")
+                    # Display intro message FIRST (before counts and SQL)
+                    st.markdown("🎉 **Great! I found matching patients for your criteria. Use the counts to assess if you need to adjust your criteria.**")
+                    st.markdown("")
                     
                     # Initialize counts from raw data - extract directly from dataframe
                     # First try to use counts from state (extracted in _get_counts)
