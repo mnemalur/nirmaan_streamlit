@@ -1509,11 +1509,9 @@ def display_dimension_results_compact(results: dict):
             if dimensions.get('gender'):
                 gender_df = pd.DataFrame(dimensions['gender'])
                 if not gender_df.empty and 'gender' in gender_df.columns and 'patient_count' in gender_df.columns:
-                    # Toggle for chart/data view
-                    show_data = st.checkbox("Show data table", key="gender_data_toggle")
-                    if show_data:
-                        st.dataframe(gender_df, use_container_width=True, hide_index=True)
-                    else:
+                    # Tabs for chart/data view
+                    gender_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with gender_tabs[0]:
                         fig = go.Figure(data=[go.Pie(
                             labels=gender_df['gender'], 
                             values=gender_df['patient_count'], 
@@ -1522,29 +1520,29 @@ def display_dimension_results_compact(results: dict):
                         )])
                         fig.update_layout(title='Gender', height=300, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
                         st.plotly_chart(fig, use_container_width=True)
+                    with gender_tabs[1]:
+                        st.dataframe(gender_df, use_container_width=True, hide_index=True)
         
         with demo_col2:
             if dimensions.get('race'):
                 race_df = pd.DataFrame(dimensions['race'])
                 if not race_df.empty and 'race' in race_df.columns and 'patient_count' in race_df.columns:
-                    show_data = st.checkbox("Show data table", key="race_data_toggle")
-                    if show_data:
-                        st.dataframe(race_df, use_container_width=True, hide_index=True)
-                    else:
+                    race_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with race_tabs[0]:
                         fig = px.bar(race_df.head(8), x='race', y='patient_count', title='Race (Top 8)', 
                                    labels={'patient_count': 'Count', 'race': 'Race'}, 
                                    color='patient_count', color_continuous_scale=COLOR_SCALE)
                         fig.update_layout(height=300, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                         st.plotly_chart(fig, use_container_width=True)
+                    with race_tabs[1]:
+                        st.dataframe(race_df, use_container_width=True, hide_index=True)
         
         with demo_col3:
             if dimensions.get('ethnicity'):
                 ethnicity_df = pd.DataFrame(dimensions['ethnicity'])
                 if not ethnicity_df.empty and 'ethnicity' in ethnicity_df.columns and 'patient_count' in ethnicity_df.columns:
-                    show_data = st.checkbox("Show data table", key="ethnicity_data_toggle")
-                    if show_data:
-                        st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
-                    else:
+                    ethnicity_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with ethnicity_tabs[0]:
                         fig = go.Figure(data=[go.Pie(
                             labels=ethnicity_df['ethnicity'], 
                             values=ethnicity_df['patient_count'], 
@@ -1553,6 +1551,8 @@ def display_dimension_results_compact(results: dict):
                         )])
                         fig.update_layout(title='Ethnicity', height=300, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
                         st.plotly_chart(fig, use_container_width=True)
+                    with ethnicity_tabs[1]:
+                        st.dataframe(ethnicity_df, use_container_width=True, hide_index=True)
     
     # Tab 2: Visit Characteristics
     with chart_tabs[1]:
@@ -1562,43 +1562,43 @@ def display_dimension_results_compact(results: dict):
             if dimensions.get('visit_level'):
                 visit_df = pd.DataFrame(dimensions['visit_level'])
                 if not visit_df.empty and 'visit_level' in visit_df.columns and 'encounter_count' in visit_df.columns:
-                    show_data = st.checkbox("Show data table", key="visit_level_data_toggle")
-                    if show_data:
-                        st.dataframe(visit_df, use_container_width=True, hide_index=True)
-                    else:
+                    visit_level_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with visit_level_tabs[0]:
                         fig = px.bar(visit_df, x='visit_level', y='encounter_count', title='Visit Level',
                                    labels={'encounter_count': 'Count', 'visit_level': 'Visit Level'}, 
                                    color='encounter_count', color_continuous_scale=COLOR_SCALE)
                         fig.update_layout(height=300, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                         st.plotly_chart(fig, use_container_width=True)
+                    with visit_level_tabs[1]:
+                        st.dataframe(visit_df, use_container_width=True, hide_index=True)
         
         with visit_col2:
             if dimensions.get('admit_type'):
                 admit_type_df = pd.DataFrame(dimensions['admit_type'])
                 if not admit_type_df.empty and 'admit_type' in admit_type_df.columns and 'encounter_count' in admit_type_df.columns:
-                    show_data = st.checkbox("Show data table", key="admit_type_data_toggle")
-                    if show_data:
-                        st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
-                    else:
+                    admit_type_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with admit_type_tabs[0]:
                         fig = px.bar(admit_type_df, x='admit_type', y='encounter_count', title='Admit Type',
                                    labels={'encounter_count': 'Count', 'admit_type': 'Admit Type'}, 
                                    color='encounter_count', color_continuous_scale=COLOR_SCALE)
                         fig.update_layout(height=300, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                         st.plotly_chart(fig, use_container_width=True)
+                    with admit_type_tabs[1]:
+                        st.dataframe(admit_type_df, use_container_width=True, hide_index=True)
         
         with visit_col3:
             if dimensions.get('admit_source'):
                 admit_source_df = pd.DataFrame(dimensions['admit_source'])
                 if not admit_source_df.empty and 'admit_source' in admit_source_df.columns and 'encounter_count' in admit_source_df.columns:
-                    show_data = st.checkbox("Show data table", key="admit_source_data_toggle")
-                    if show_data:
-                        st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
-                    else:
+                    admit_source_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with admit_source_tabs[0]:
                         fig = px.bar(admit_source_df.head(8), x='admit_source', y='encounter_count', title='Admit Source (Top 8)',
                                    labels={'encounter_count': 'Count', 'admit_source': 'Admit Source'}, 
                                    color='encounter_count', color_continuous_scale=COLOR_SCALE)
                         fig.update_layout(height=300, showlegend=False, xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
                         st.plotly_chart(fig, use_container_width=True)
+                    with admit_source_tabs[1]:
+                        st.dataframe(admit_source_df, use_container_width=True, hide_index=True)
     
     # Tab 3: Site Characteristics
     with chart_tabs[2]:
@@ -1608,10 +1608,8 @@ def display_dimension_results_compact(results: dict):
             if dimensions.get('urban_rural'):
                 urban_rural_df = pd.DataFrame(dimensions['urban_rural'])
                 if not urban_rural_df.empty and 'location_type' in urban_rural_df.columns and 'patient_count' in urban_rural_df.columns:
-                    show_data = st.checkbox("Show data table", key="urban_rural_data_toggle")
-                    if show_data:
-                        st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
-                    else:
+                    urban_rural_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with urban_rural_tabs[0]:
                         fig = go.Figure(data=[go.Pie(
                             labels=urban_rural_df['location_type'], 
                             values=urban_rural_df['patient_count'], 
@@ -1620,15 +1618,15 @@ def display_dimension_results_compact(results: dict):
                         )])
                         fig.update_layout(title='Urban/Rural', height=300, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
                         st.plotly_chart(fig, use_container_width=True)
+                    with urban_rural_tabs[1]:
+                        st.dataframe(urban_rural_df, use_container_width=True, hide_index=True)
         
         with site_col2:
             if dimensions.get('teaching'):
                 teaching_df = pd.DataFrame(dimensions['teaching'])
                 if not teaching_df.empty and 'teaching_status' in teaching_df.columns and 'patient_count' in teaching_df.columns:
-                    show_data = st.checkbox("Show data table", key="teaching_data_toggle")
-                    if show_data:
-                        st.dataframe(teaching_df, use_container_width=True, hide_index=True)
-                    else:
+                    teaching_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with teaching_tabs[0]:
                         fig = go.Figure(data=[go.Pie(
                             labels=teaching_df['teaching_status'], 
                             values=teaching_df['patient_count'], 
@@ -1637,20 +1635,22 @@ def display_dimension_results_compact(results: dict):
                         )])
                         fig.update_layout(title='Teaching Status', height=300, margin=dict(l=0, r=0, t=30, b=0), showlegend=True)
                         st.plotly_chart(fig, use_container_width=True)
+                    with teaching_tabs[1]:
+                        st.dataframe(teaching_df, use_container_width=True, hide_index=True)
         
         with site_col3:
             if dimensions.get('bed_count'):
                 bed_count_df = pd.DataFrame(dimensions['bed_count'])
                 if not bed_count_df.empty and 'bed_count_group' in bed_count_df.columns and 'patient_count' in bed_count_df.columns:
-                    show_data = st.checkbox("Show data table", key="bed_count_data_toggle")
-                    if show_data:
-                        st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
-                    else:
+                    bed_count_tabs = st.tabs(["📊 Chart", "📋 Data"])
+                    with bed_count_tabs[0]:
                         fig = px.bar(bed_count_df, x='bed_count_group', y='patient_count', title='Bed Count Groups',
                                    labels={'patient_count': 'Count', 'bed_count_group': 'Bed Count'}, 
                                    color='patient_count', color_continuous_scale=COLOR_SCALE)
                         fig.update_layout(height=300, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
                         st.plotly_chart(fig, use_container_width=True)
+                    with bed_count_tabs[1]:
+                        st.dataframe(bed_count_df, use_container_width=True, hide_index=True)
 
 
 def display_dimension_results(results: dict):
