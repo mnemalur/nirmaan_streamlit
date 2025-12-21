@@ -759,6 +759,11 @@ def render_chat_page():
                                 parts.append(f"**{sites} sites**")
                             count_msg += " and ".join(parts)
                             st.info(count_msg)
+                    
+                    # Show dimension results if available (from explore cohort)
+                    if "dimension_results" in data and data["dimension_results"]:
+                        st.markdown("")  # Add spacing
+                        display_dimension_results_compact(data["dimension_results"])
 
     # Chat input
     if prompt := st.chat_input("Describe your clinical criteria or ask a question..."):
@@ -1189,6 +1194,35 @@ def process_query_conversational(query: str):
                     # Build final response
                     response_text = "\n".join(response_parts) if response_parts else "I've processed your request. Review the details above."
                 
+                elif current_step == "analysis":
+                    # User chose to explore cohort - show dimension analysis results
+                    dimension_results = result_state.get("dimension_results")
+                    
+                    if dimension_results:
+                        # Show success message
+                        response_parts.append("🎉 **Great! I've analyzed your cohort dimensions. Here are the insights:**")
+                        response_parts.append("")
+                        response_text = "\n".join(response_parts) if response_parts else ""
+                        
+                        # Display dimension visualizations
+                        st.markdown("🎉 **Great! I've analyzed your cohort dimensions. Here are the insights:**")
+                        st.markdown("")
+                        
+                        # Display dimension results with visualizations
+                        display_dimension_results_compact(dimension_results)
+                        
+                        # Show cohort table info if available
+                        cohort_table = result_state.get("cohort_table")
+                        cohort_count = result_state.get("cohort_count", 0)
+                        if cohort_table:
+                            st.info(f"📊 **Cohort Table**: {cohort_table} ({cohort_count:,} rows)")
+                    else:
+                        # Dimension analysis might still be running or failed
+                        response_text = "⏳ Analyzing cohort dimensions... This may take a moment."
+                        st.info("⏳ Analyzing cohort dimensions... This may take a moment.")
+                        if result_state.get("error"):
+                            st.error(f"Error: {result_state.get('error')}")
+                
                 elif current_step in ["follow_up", "insights"]:
                     # Handle follow-up questions
                     answer_data = result_state.get("answer_data", {})
@@ -1267,32 +1301,65 @@ def process_query_conversational(query: str):
                                     logger.info(f"🔍 Used fallback numeric value for patient_count: {patient_count_for_message}")
                 
                 # Get all counts for blue ribbon display
-                counts_from_state = result_state.get("counts", {})
-                patients_for_data = counts_from_state.get("patients", patient_count_for_message)
-                visits_for_data = counts_from_state.get("visits", 0)
-                sites_for_data = counts_from_state.get("sites", 0)
-                
-                # If counts are 0 or 1, try to extract from raw_count_data
-                if patients_for_data <= 1 and visits_for_data == 0 and sites_for_data == 0:
-                    raw_count_data = result_state.get("raw_count_data")
-                    if raw_count_data:
-                        row = raw_count_data.get("row", {})
-                        if isinstance(row, dict):
-                            # Extract all counts from row
-                            for key, value in row.items():
-                                key_lower = str(key).lower()
-                                try:
-                                    if value is not None:
-                                        num_val = int(float(str(value)))
-                                        if num_val > 1:  # Skip values of 0 or 1
-                                            if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
-                                                patients_for_data = num_val
-                                            elif ('visit' in key_lower or 'encounter' in key_lower) and ('count' in key_lower or key_lower in ['visits', 'encounter_count']):
-                                                visits_for_data = num_val
-                                            elif ('site' in key_lower or 'provider' in key_lower) and ('count' in key_lower or key_lower in ['sites', 'provider_count']):
-                                                sites_for_data = num_val
-                                except (ValueError, TypeError):
-                                    pass
+                # CRITICAL: For analysis step, preserve the original counts from analysis_decision step
+                # Don't extract from dimension_results - those are different metrics
+                if current_step == "analysis":
+                    # For analysis step, try to get counts from previous message or state
+                    # The counts should be the same ones user saw and liked
+                    counts_from_state = result_state.get("counts", {})
+                    patients_for_data = counts_from_state.get("patients", 0)
+                    visits_for_data = counts_from_state.get("visits", 0)
+                    sites_for_data = counts_from_state.get("sites", 0)
+                    
+                    # If not in state, try to get from raw_count_data (original counts)
+                    if patients_for_data <= 1 and visits_for_data == 0 and sites_for_data == 0:
+                        raw_count_data = result_state.get("raw_count_data")
+                        if raw_count_data:
+                            row = raw_count_data.get("row", {})
+                            if isinstance(row, dict):
+                                # Extract all counts from row (original counts from Genie)
+                                for key, value in row.items():
+                                    key_lower = str(key).lower()
+                                    try:
+                                        if value is not None:
+                                            num_val = int(float(str(value)))
+                                            if num_val > 1:  # Skip values of 0 or 1
+                                                if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
+                                                    patients_for_data = num_val
+                                                elif ('visit' in key_lower or 'encounter' in key_lower) and ('count' in key_lower or key_lower in ['visits', 'encounter_count']):
+                                                    visits_for_data = num_val
+                                                elif ('site' in key_lower or 'provider' in key_lower) and ('count' in key_lower or key_lower in ['sites', 'provider_count']):
+                                                    sites_for_data = num_val
+                                    except (ValueError, TypeError):
+                                        pass
+                else:
+                    # For other steps, use normal extraction logic
+                    counts_from_state = result_state.get("counts", {})
+                    patients_for_data = counts_from_state.get("patients", patient_count_for_message)
+                    visits_for_data = counts_from_state.get("visits", 0)
+                    sites_for_data = counts_from_state.get("sites", 0)
+                    
+                    # If counts are 0 or 1, try to extract from raw_count_data
+                    if patients_for_data <= 1 and visits_for_data == 0 and sites_for_data == 0:
+                        raw_count_data = result_state.get("raw_count_data")
+                        if raw_count_data:
+                            row = raw_count_data.get("row", {})
+                            if isinstance(row, dict):
+                                # Extract all counts from row
+                                for key, value in row.items():
+                                    key_lower = str(key).lower()
+                                    try:
+                                        if value is not None:
+                                            num_val = int(float(str(value)))
+                                            if num_val > 1:  # Skip values of 0 or 1
+                                                if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
+                                                    patients_for_data = num_val
+                                                elif ('visit' in key_lower or 'encounter' in key_lower) and ('count' in key_lower or key_lower in ['visits', 'encounter_count']):
+                                                    visits_for_data = num_val
+                                                elif ('site' in key_lower or 'provider' in key_lower) and ('count' in key_lower or key_lower in ['sites', 'provider_count']):
+                                                    sites_for_data = num_val
+                                    except (ValueError, TypeError):
+                                        pass
                 
                 # Add to message history - include codes if we're in code selection phase
                 message_data = {
@@ -1302,6 +1369,10 @@ def process_query_conversational(query: str):
                     "sites": sites_for_data,
                     "genie_prompt": result_state.get("genie_prompt")
                 }
+                
+                # For analysis step, also include dimension_results in message data
+                if current_step == "analysis":
+                    message_data["dimension_results"] = result_state.get("dimension_results")
                 
                 # Include codes in message data if we're waiting for code selection
                 waiting_for = result_state.get("waiting_for")
