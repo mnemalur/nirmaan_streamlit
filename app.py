@@ -960,7 +960,11 @@ def process_query_conversational(query: str):
                         if genie_data:
                             logger.info(f"🔍 CRITICAL: Found genie_data directly: {len(genie_data)} row(s)")
                     
-                    # Display intro message FIRST (before counts and SQL)
+                    # Add intro message to response_parts FIRST (will be displayed in response_text at the end)
+                    response_parts.append("🎉 **Great! I found matching patients for your criteria. Use the counts to assess if you need to adjust your criteria.**")
+                    response_parts.append("")
+                    
+                    # Display intro message FIRST (before counts and SQL) - show it immediately for better UX
                     st.markdown("🎉 **Great! I found matching patients for your criteria. Use the counts to assess if you need to adjust your criteria.**")
                     st.markdown("")
                     
