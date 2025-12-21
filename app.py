@@ -909,30 +909,24 @@ def process_query_conversational(query: str):
                 
                 # Check if we're waiting for code selection
                 elif waiting_for == "code_selection":
-                    # Show what I understood
-                    diagnosis_phrases = result_state.get("diagnosis_phrases", [])
-                    if diagnosis_phrases:
-                        response_parts.append(f"I understood you're looking for: **{', '.join(diagnosis_phrases)}**")
-                    
-                    # Show codes found
+                    # CRITICAL: Show codes in expander - user needs to see them to make selection decision
                     codes = result_state.get("codes", [])
                     if codes:
-                        response_parts.append(f"I found **{len(codes)} relevant clinical codes**.")
+                        response_parts.append(f"I found **{len(codes)} relevant clinical codes** from your criteria.")
+                        response_parts.append("")
                         
-                        # Show codes table in a simple, conversational way
+                        # Show codes table in expander (expanded by default so user can see them)
                         code_df = pd.DataFrame(codes)
                         display_cols = ['code', 'description', 'vocabulary']
                         available_cols = [col for col in display_cols if col in code_df.columns]
                         
                         if available_cols:
-                            # Show table in collapsible expander
-                            with st.expander(f"📋 View All {len(codes)} Codes (Click to expand)", expanded=False):
+                            # Show codes in expander - expanded by default so user sees them immediately
+                            with st.expander(f"📋 View All {len(codes)} Codes Found", expanded=True):
                                 st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                         
-                        # Add helpful text about what user can do - purely conversational
-                        if not response_parts:
-                            response_parts.append(f"I found **{len(codes)} relevant clinical codes**.")
-                        response_parts.append("\n\n💬 **How would you like to proceed?**")
+                        # Add helpful text about what user can do
+                        response_parts.append("💬 **How would you like to proceed?**")
                         response_parts.append("You can type your response below:")
                         response_parts.append("- **'use all'** - to use all the codes I found")
                         response_parts.append("- **'select codes'** - if you want to choose specific codes")
@@ -942,7 +936,7 @@ def process_query_conversational(query: str):
                         response_parts.append("I searched for codes but didn't find any matching results.")
                         response_parts.append("Would you like to refine your criteria or proceed with natural language query?")
                     
-                    response_text = "\n".join(response_parts) if response_parts else "I've searched for codes. See the results above."
+                    response_text = "\n".join(response_parts) if response_parts else "I've searched for codes. Review them above to make your selection."
                 
                 # Check if we're waiting for analysis decision
                 elif waiting_for == "analysis_decision":
