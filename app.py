@@ -723,9 +723,30 @@ def render_chat_page():
                         with st.expander("📝 Generated SQL", expanded=False):
                             st.code(data["sql"], language="sql")
                     
-                    # Show count if available
+                    # Show count if available - show all 3 metrics in blue ribbon
                     if "count" in data:
-                        st.info(f"📊 Found {data['count']:,} patients")
+                        patients = data.get("count", 0)
+                        visits = data.get("visits", 0)
+                        sites = data.get("sites", 0)
+                        
+                        # Build message with all 3 metrics
+                        if patients > 0:
+                            count_msg = f"📊 Found **{patients:,} patients**"
+                            if visits > 0:
+                                count_msg += f" across **{visits:,} visits**"
+                            if sites > 0:
+                                count_msg += f" at **{sites} sites**"
+                            st.info(count_msg)
+                        elif visits > 0 or sites > 0:
+                            # Show visits/sites even if patients is 0
+                            count_msg = "📊 Found "
+                            parts = []
+                            if visits > 0:
+                                parts.append(f"**{visits:,} visits**")
+                            if sites > 0:
+                                parts.append(f"**{sites} sites**")
+                            count_msg += " and ".join(parts)
+                            st.info(count_msg)
 
     # Chat input
     if prompt := st.chat_input("Describe your clinical criteria or ask a question..."):
@@ -935,9 +956,7 @@ def process_query_conversational(query: str):
                         if genie_data:
                             logger.info(f"🔍 CRITICAL: Found genie_data directly: {len(genie_data)} row(s)")
                     
-                    response_parts.append("🎉 **Great! I found matching patients for your criteria.**")
-                    response_parts.append("")
-                    response_parts.append("📊 **Below are the counts from the executed SQL query. Use these to assess if you need to adjust your criteria.**")
+                    response_parts.append("🎉 **Great! I found matching patients for your criteria. Use the counts to assess if you need to adjust your criteria.**")
                     response_parts.append("")
                     
                     # Initialize counts from raw data - extract directly from dataframe
@@ -1092,12 +1111,7 @@ def process_query_conversational(query: str):
                         with col3:
                             st.metric("**Sites**", f"{sites:,}" if sites > 0 else "N/A")
                         
-                        if patients > 0:
-                            response_parts.append(f"✅ Found **{patients:,} patients**")
-                            if visits > 0:
-                                response_parts.append(f"across **{visits:,} visits**")
-                            if sites > 0:
-                                response_parts.append(f"at **{sites} sites**")
+                        # Counts are now shown in blue ribbon above - no need to repeat in response text
                     else:
                         response_parts.append("✅ Generated SQL query. Ready to execute.")
                     
@@ -1241,6 +1255,34 @@ def process_query_conversational(query: str):
                                     patient_count_for_message = numeric_values[0][1]
                                     logger.info(f"🔍 Used fallback numeric value for patient_count: {patient_count_for_message}")
                 
+                # Get all counts for blue ribbon display
+                counts_from_state = result_state.get("counts", {})
+                patients_for_data = counts_from_state.get("patients", patient_count_for_message)
+                visits_for_data = counts_from_state.get("visits", 0)
+                sites_for_data = counts_from_state.get("sites", 0)
+                
+                # If counts are 0 or 1, try to extract from raw_count_data
+                if patients_for_data <= 1 and visits_for_data == 0 and sites_for_data == 0:
+                    raw_count_data = result_state.get("raw_count_data")
+                    if raw_count_data:
+                        row = raw_count_data.get("row", {})
+                        if isinstance(row, dict):
+                            # Extract all counts from row
+                            for key, value in row.items():
+                                key_lower = str(key).lower()
+                                try:
+                                    if value is not None:
+                                        num_val = int(float(str(value)))
+                                        if num_val > 1:  # Skip values of 0 or 1
+                                            if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
+                                                patients_for_data = num_val
+                                            elif ('visit' in key_lower or 'encounter' in key_lower) and ('count' in key_lower or key_lower in ['visits', 'encounter_count']):
+                                                visits_for_data = num_val
+                                            elif ('site' in key_lower or 'provider' in key_lower) and ('count' in key_lower or key_lower in ['sites', 'provider_count']):
+                                                sites_for_data = num_val
+                                except (ValueError, TypeError):
+                                    pass
+                
                 # Add to message history
                 st.session_state.messages.append({
                     "role": "assistant",
@@ -1248,7 +1290,9 @@ def process_query_conversational(query: str):
                     "data": {
                         "codes": result_state.get("codes", []),
                         "sql": result_state.get("sql"),
-                        "count": patient_count_for_message,
+                        "count": patients_for_data,
+                        "visits": visits_for_data,
+                        "sites": sites_for_data,
                         "genie_prompt": result_state.get("genie_prompt")
                     }
                 })
