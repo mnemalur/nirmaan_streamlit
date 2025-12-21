@@ -909,19 +909,19 @@ def process_query_conversational(query: str):
                 
                 # Check if we're waiting for code selection
                 elif waiting_for == "code_selection":
-                    # CRITICAL: Show codes in expander - user needs to see them to make selection decision
+                    # CRITICAL: Show codes prominently - user needs to see them to make selection decision
                     codes = result_state.get("codes", [])
                     if codes:
                         response_parts.append(f"I found **{len(codes)} relevant clinical codes** from your criteria.")
                         response_parts.append("")
                         
-                        # Show codes table in expander (expanded by default so user can see them)
+                        # Show codes table prominently in a grid/dataframe - directly visible
                         code_df = pd.DataFrame(codes)
                         display_cols = ['code', 'description', 'vocabulary']
                         available_cols = [col for col in display_cols if col in code_df.columns]
                         
                         if available_cols:
-                            # Show codes in expander - expanded by default so user sees them immediately
+                            # Show codes in expander (expanded by default) - user can see grid and collapse if needed
                             with st.expander(f"📋 View All {len(codes)} Codes Found", expanded=True):
                                 st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                         
