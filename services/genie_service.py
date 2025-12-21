@@ -1494,11 +1494,17 @@ class GenieService:
             lines.append("- The query should SELECT these three counts from the filtered cohort.")
             lines.append("- Do NOT return individual patient rows - only return the aggregated counts.")
         else:
-            lines.append("IMPORTANT: Return actual patient records for materialization:")
-            lines.append("- Return DISTINCT patient identifiers (MEDREC_KEY or PAT_KEY) and any other relevant patient-level fields")
-            lines.append("- The query should SELECT the actual patient records from the filtered cohort")
-            lines.append("- Include all necessary columns to identify patients uniquely")
-            lines.append("- Do NOT aggregate - return individual patient rows")
+            lines.append("IMPORTANT: Return actual patient records for materialization (NOT counts):")
+            lines.append("- Return DISTINCT patient/visit records from the filtered cohort")
+            lines.append("- The query must SELECT actual patient rows, NOT aggregated counts")
+            lines.append("- CRITICAL: Include patient identifiers - SELECT at least one of:")
+            lines.append("  * MEDREC_KEY (if available) - for patient-level joins")
+            lines.append("  * PAT_KEY (if available) - for visit/encounter-level joins")
+            lines.append("  * Or both MEDREC_KEY and PAT_KEY if both are available")
+            lines.append("- These identifiers are REQUIRED for dimension analysis joins with phd_de_patdemo table")
+            lines.append("- Use SELECT DISTINCT to avoid duplicate patient/visit records")
+            lines.append("- Do NOT use COUNT(), GROUP BY, or any aggregation functions")
+            lines.append("- Return individual patient/visit rows, one row per patient or visit")
 
         return "\n".join(lines)
 
