@@ -1482,13 +1482,23 @@ class GenieService:
             lines.append("- Apply the demographic filters listed above (age, sex, setting, etc.).")
         lines.append("- Apply the additional filters where appropriate.")
         lines.append("")
-        lines.append("IMPORTANT: Instead of returning patient-level data, return aggregated counts:")
-        lines.append("- Return a single row with three columns:")
-        lines.append("  * patient_count: COUNT(DISTINCT patient_id or MEDREC_KEY or PAT_KEY)")
-        lines.append("  * visit_count: COUNT(DISTINCT encounter_id or PAT_KEY - since phd_de_patdemo is the encounter table)")
-        lines.append("  * site_count: COUNT(DISTINCT PROV_ID or PROVIDER_KEY)")
-        lines.append("- The query should SELECT these three counts from the filtered cohort.")
-        lines.append("- Do NOT return individual patient rows - only return the aggregated counts.")
+        # Check if we want patient records or counts
+        return_counts = criteria.get("return_counts", True)  # Default to counts for backward compatibility
+        
+        if return_counts:
+            lines.append("IMPORTANT: Instead of returning patient-level data, return aggregated counts:")
+            lines.append("- Return a single row with three columns:")
+            lines.append("  * patient_count: COUNT(DISTINCT patient_id or MEDREC_KEY or PAT_KEY)")
+            lines.append("  * visit_count: COUNT(DISTINCT encounter_id or PAT_KEY - since phd_de_patdemo is the encounter table)")
+            lines.append("  * site_count: COUNT(DISTINCT PROV_ID or PROVIDER_KEY)")
+            lines.append("- The query should SELECT these three counts from the filtered cohort.")
+            lines.append("- Do NOT return individual patient rows - only return the aggregated counts.")
+        else:
+            lines.append("IMPORTANT: Return actual patient records for materialization:")
+            lines.append("- Return DISTINCT patient identifiers (MEDREC_KEY or PAT_KEY) and any other relevant patient-level fields")
+            lines.append("- The query should SELECT the actual patient records from the filtered cohort")
+            lines.append("- Include all necessary columns to identify patients uniquely")
+            lines.append("- Do NOT aggregate - return individual patient rows")
 
         return "\n".join(lines)
 

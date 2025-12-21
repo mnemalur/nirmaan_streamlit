@@ -999,24 +999,89 @@ Return a refined criteria summary that combines the original criteria with the u
         try:
             # Check if cohort table already exists
             cohort_table = state.get("cohort_table")
-            sql = state.get("sql")
             session_id = state.get("session_id", "default")
             
-            # If cohort table doesn't exist, materialize it
+            # If cohort table doesn't exist, we need to generate SQL for patient records (not counts)
             if not cohort_table:
-                if not sql:
-                    state["error"] = "No SQL available to materialize cohort. Please generate SQL first."
+                reasoning.append(("Generate Patient SQL", "Generating SQL for patient records (not counts) for materialization"))
+                logger.info("Cohort table doesn't exist - generating SQL for patient records")
+                
+                # Reconstruct the original criteria from state
+                selected_codes = state.get("selected_codes", [])
+                original_query = state.get("user_query", "")
+                criteria_analysis = state.get("criteria_analysis", {})
+                
+                # Extract all criteria components
+                demographics = criteria_analysis.get("demographics", [])
+                drugs = criteria_analysis.get("drugs", [])
+                procedures = criteria_analysis.get("procedures", [])
+                timeframe = criteria_analysis.get("timeframe", "") or "5 years"
+                conditions = criteria_analysis.get("conditions", [])
+                
+                # Build criteria with return_counts=False to get patient records
+                if selected_codes:
+                    criteria = {
+                        'codes': [c.get('code') for c in selected_codes if c.get('code')],
+                        'original_query': original_query,
+                        'code_details': [
+                            {
+                                'code': c.get('code'),
+                                'description': c.get('description'),
+                                'vocabulary': c.get('vocabulary')
+                            }
+                            for c in selected_codes
+                        ],
+                        'vocabularies': state.get("vocabularies", []),
+                        'demographics': demographics,
+                        'drugs': drugs,
+                        'procedures': procedures,
+                        'conditions': conditions,
+                        'timeframe': timeframe,
+                        'age': None,
+                        'patient_table_prefix': config.patient_table_prefix,
+                        'return_counts': False  # CRITICAL: Get patient records, not counts
+                    }
+                else:
+                    criteria = {
+                        'codes': [],
+                        'original_query': original_query,
+                        'code_details': [],
+                        'vocabularies': [],
+                        'demographics': demographics,
+                        'drugs': drugs,
+                        'procedures': procedures,
+                        'conditions': conditions,
+                        'timeframe': timeframe,
+                        'age': None,
+                        'patient_table_prefix': config.patient_table_prefix,
+                        'return_counts': False  # CRITICAL: Get patient records, not counts
+                    }
+                
+                # Generate SQL for patient records
+                logger.info("Calling Genie to generate SQL for patient records")
+                result = self.genie_service.create_cohort_query(criteria)
+                
+                patient_sql = result.get('sql')
+                if not patient_sql:
+                    state["error"] = "Failed to generate SQL for patient records. Please try again."
                     state["current_step"] = "error"
                     return state
                 
-                reasoning.append(("Materialize Cohort", "Creating cohort table from SQL"))
+                reasoning.append(("Generate Patient SQL", f"Generated SQL for patient records ({len(patient_sql)} characters)"))
+                logger.info(f"Generated SQL for patient records: {patient_sql[:200]}...")
+                
+                # Now materialize using the patient records SQL
+                reasoning.append(("Materialize Cohort", "Creating cohort table from patient records SQL"))
                 logger.info(f"Materializing cohort for session {session_id}")
                 
                 # Use cohort_manager to materialize
-                cohort_result = self.cohort_manager.materialize_cohort(session_id, sql)
+                cohort_result = self.cohort_manager.materialize_cohort(session_id, patient_sql)
                 cohort_table = cohort_result['cohort_table']
                 state["cohort_table"] = cohort_table
                 state["cohort_count"] = cohort_result.get('count', 0)
+                
+                # Store the patient SQL for later use (e.g., dimension analysis structure detection)
+                state["patient_sql"] = patient_sql
                 
                 reasoning.append(("Materialize Cohort", f"Cohort table created: {cohort_table} with {cohort_result.get('count', 0)} rows"))
                 logger.info(f"Cohort materialized: {cohort_table} with {cohort_result.get('count', 0)} rows")
@@ -1033,8 +1098,13 @@ Return a refined criteria summary that combines the original criteria with the u
             reasoning.append(("Dimension Analysis", "Starting dimension analysis"))
             logger.info(f"Running dimension analysis on {cohort_table}")
             
-            # Detect cohort structure from SQL
-            has_medrec_key, has_pat_key = self.dimension_service.detect_cohort_structure(sql)
+            # Detect cohort structure from SQL (use patient_sql if available, otherwise use original sql)
+            sql_for_detection = state.get("patient_sql") or state.get("sql")
+            if not sql_for_detection:
+                state["error"] = "No SQL available for structure detection"
+                state["current_step"] = "error"
+                return state
+            has_medrec_key, has_pat_key = self.dimension_service.detect_cohort_structure(sql_for_detection)
             
             # Run dimension analysis
             dimension_results = self.dimension_service.analyze_dimensions(
