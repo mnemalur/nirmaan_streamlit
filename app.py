@@ -713,11 +713,21 @@ def render_chat_page():
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             
-            # Show additional data if available (SQL, etc.)
-            # Note: Codes are not shown here as they're already displayed during the code search phase
+            # Show additional data if available (SQL, codes, etc.)
             if "data" in message:
                 data = message["data"]
                 if isinstance(data, dict):
+                    # Show codes if available (during code selection phase)
+                    if "codes" in data and data["codes"]:
+                        codes = data["codes"]
+                        if codes:
+                            code_df = pd.DataFrame(codes)
+                            display_cols = ['code', 'description', 'vocabulary']
+                            available_cols = [col for col in display_cols if col in code_df.columns]
+                            if available_cols:
+                                with st.expander(f"📋 View All {len(codes)} Codes Found", expanded=True):
+                                    st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                    
                     # Show SQL if available
                     if "sql" in data and data["sql"]:
                         with st.expander("📝 Generated SQL", expanded=False):
@@ -1278,18 +1288,24 @@ def process_query_conversational(query: str):
                                 except (ValueError, TypeError):
                                     pass
                 
-                # Add to message history
+                # Add to message history - include codes if we're in code selection phase
+                message_data = {
+                    "sql": result_state.get("sql"),
+                    "count": patients_for_data,
+                    "visits": visits_for_data,
+                    "sites": sites_for_data,
+                    "genie_prompt": result_state.get("genie_prompt")
+                }
+                
+                # Include codes in message data if we're waiting for code selection
+                waiting_for = result_state.get("waiting_for")
+                if waiting_for == "code_selection" and result_state.get("codes"):
+                    message_data["codes"] = result_state.get("codes", [])
+                
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": response_text,
-                    "data": {
-                        "codes": result_state.get("codes", []),
-                        "sql": result_state.get("sql"),
-                        "count": patients_for_data,
-                        "visits": visits_for_data,
-                        "sites": sites_for_data,
-                        "genie_prompt": result_state.get("genie_prompt")
-                    }
+                    "data": message_data
                 })
                 
             except Exception as e:
