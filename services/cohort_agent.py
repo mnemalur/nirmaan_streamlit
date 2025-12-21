@@ -663,29 +663,29 @@ class CohortAgent:
             
             # Check if Genie returned count results (single row with patient_count, visit_count, site_count)
             # This is the ACTUAL result from Genie's SQL execution - CRITICAL for user decision-making
+            
+            # Initialize cohort_count to 0 in case we can't extract it
+            state["cohort_count"] = 0
+            
+            # If Genie returned a single row, it's likely count results - store it for UI to display
+            if genie_data and len(genie_data) == 1:
+                # Check column names to see if this is a count result
+                column_names = [col.lower() if isinstance(col, str) else str(col).lower() for col in genie_columns] if genie_columns else []
+                has_count_columns = any(keyword in ' '.join(column_names) for keyword in ['patient_count', 'visit_count', 'site_count', 'count'])
                 
-                # Initialize cohort_count to 0 in case we can't extract it
-                state["cohort_count"] = 0
+                row = genie_data[0]
                 
-                # If Genie returned a single row, it's likely count results - store it for UI to display
-                if genie_data and len(genie_data) == 1:
-                    # Check column names to see if this is a count result
-                    column_names = [col.lower() if isinstance(col, str) else str(col).lower() for col in genie_columns] if genie_columns else []
-                    has_count_columns = any(keyword in ' '.join(column_names) for keyword in ['patient_count', 'visit_count', 'site_count', 'count'])
-                    
-                    row = genie_data[0]
-                    
-                    # Convert row to dict if it's a list/tuple (using column names as keys)
-                    if not isinstance(row, dict) and genie_columns:
-                        # Row is a list/tuple - convert to dict using column names
-                        try:
-                            row = dict(zip(genie_columns, row))
-                            logger.info(f"🔍 Converted list/tuple row to dict using columns: {genie_columns}")
-                        except Exception as e:
-                            logger.warning(f"Could not convert row to dict: {e}")
-                    
-                    # Store the row data for UI to display - simpler and more transparent
-                    if isinstance(row, dict):
+                # Convert row to dict if it's a list/tuple (using column names as keys)
+                if not isinstance(row, dict) and genie_columns:
+                    # Row is a list/tuple - convert to dict using column names
+                    try:
+                        row = dict(zip(genie_columns, row))
+                        logger.info(f"🔍 Converted list/tuple row to dict using columns: {genie_columns}")
+                    except Exception as e:
+                        logger.warning(f"Could not convert row to dict: {e}")
+                
+                # Store the row data for UI to display - simpler and more transparent
+                if isinstance(row, dict):
                         logger.info(f"🔍 CRITICAL: Genie SQL execution result row: {row}")
                         logger.info(f"🔍 CRITICAL: Column names from Genie: {genie_columns}")
                         logger.info(f"🔍 CRITICAL: Row keys: {list(row.keys())}")
