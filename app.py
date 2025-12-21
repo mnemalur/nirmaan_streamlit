@@ -950,8 +950,9 @@ def process_query_conversational(query: str):
                         if genie_data:
                             logger.info(f"🔍 CRITICAL: Found genie_data directly: {len(genie_data)} row(s)")
                     
-                    response_parts.append("🎉 **Great! I found matching patients for your criteria. Use the counts to assess if you need to adjust your criteria.**")
-                    response_parts.append("")
+                    # Show intro message first
+                    st.markdown("🎉 **Great! I found matching patients for your criteria. Use the counts to assess if you need to adjust your criteria.**")
+                    st.markdown("")
                     
                     # Initialize counts from raw data - extract directly from dataframe
                     # First try to use counts from state (extracted in _get_counts)
@@ -1109,18 +1110,18 @@ def process_query_conversational(query: str):
                     else:
                         response_parts.append("✅ Generated SQL query. Ready to execute.")
                     
-                    # Show SQL if available
+                    # Show SQL if available (after counts)
                     sql = result_state.get("sql")
                     if sql:
                         msg_idx = len(st.session_state.messages)
                         with st.expander("📝 View Generated SQL", expanded=False):
                             st.code(sql, language="sql")
                     
-                    # Ask about next steps conversationally
+                    # Ask about next steps conversationally (after showing all results)
                     response_parts.append("\n\n💬 **What would you like to do next?**")
                     response_parts.append("- **Explore this cohort** further (demographics, trends, outcomes)")
                     response_parts.append("- **Adjust your criteria** to refine the results")
-                    response_text = "\n".join(response_parts)
+                    response_text = "\n".join(response_parts) if response_parts else ""
                 
                 elif current_step == "new_cohort":
                     # Show what I understood
