@@ -713,19 +713,11 @@ def render_chat_page():
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             
-            # Show additional data if available (codes, SQL, etc.)
+            # Show additional data if available (SQL, etc.)
+            # Note: Codes are not shown here as they're already displayed during the code search phase
             if "data" in message:
                 data = message["data"]
                 if isinstance(data, dict):
-                    # Show codes if available
-                    if "codes" in data and data["codes"]:
-                        with st.expander("📋 Found Codes", expanded=False):
-                            code_df = pd.DataFrame(data["codes"])
-                            display_cols = ['code', 'description', 'vocabulary']
-                            available_cols = [col for col in display_cols if col in code_df.columns]
-                            if available_cols:
-                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
-                    
                     # Show SQL if available
                     if "sql" in data and data["sql"]:
                         with st.expander("📝 Generated SQL", expanded=False):

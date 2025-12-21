@@ -615,7 +615,8 @@ class CohortAgent:
             state["genie_prompt"] = result.get("prompt")
             state["genie_conversation_id"] = result.get('conversation_id')
             state["sql"] = result.get('sql')
-            state["cohort_count"] = result.get('row_count', 0)
+            # Don't set cohort_count here - it will be set in _get_counts after extracting from the actual data
+            # The row_count here is just the number of rows (1), not the patient count
             state["genie_data"] = result.get('data', [])  # Store data returned by Genie
             state["genie_columns"] = result.get('columns', [])  # Store column names from Genie
             
@@ -666,10 +667,14 @@ class CohortAgent:
             
             if not sql:
                 state["counts"] = {"patients": 0, "visits": 0, "sites": 0}
+                state["cohort_count"] = 0
                 reasoning.append(("Counts", "No SQL available, counts unavailable"))
             else:
                 # Check if Genie returned count results (single row with patient_count, visit_count, site_count)
                 genie_columns = state.get("genie_columns", [])
+                
+                # Initialize cohort_count to 0 in case we can't extract it
+                state["cohort_count"] = 0
                 
                 # If Genie returned a single row, it's likely count results - store it for UI to display
                 if genie_data and len(genie_data) == 1:
@@ -723,6 +728,8 @@ class CohortAgent:
                             "visits": visit_count,
                             "sites": site_count
                         }
+                        # Update cohort_count with the actual patient count (not row count)
+                        state["cohort_count"] = patient_count
                         logger.info(f"✅ Extracted counts: patients={patient_count}, visits={visit_count}, sites={site_count}")
                         reasoning.append(("Counts", f"Found {patient_count} patients, {visit_count} visits, {site_count} sites"))
                     else:
@@ -737,7 +744,9 @@ class CohortAgent:
                             "visits": 0,
                             "sites": 0
                         }
-                        reasoning.append(("Counts", "Stored raw data for display"))
+                        # Set cohort_count to 0 since we couldn't extract patient count
+                        state["cohort_count"] = 0
+                        reasoning.append(("Counts", "Stored raw data for display (could not extract counts)"))
                 else:
                     # Genie returned patient-level data - need to calculate distinct counts
                     # Try to extract distinct counts from the data
@@ -774,6 +783,8 @@ class CohortAgent:
                                 "visits": visit_count,
                                 "sites": site_count
                             }
+                            # Update cohort_count with the actual patient count
+                            state["cohort_count"] = patient_count
                             reasoning.append(("Counts", f"Found {patient_count} patients, {visit_count} visits, {site_count} sites (from data analysis)"))
                         except Exception as e:
                             logger.warning(f"Error analyzing data for counts: {e}")
@@ -783,6 +794,8 @@ class CohortAgent:
                                 "visits": 0,
                                 "sites": 0
                             }
+                            # Update cohort_count (this is a fallback, so row_count might be correct here)
+                            state["cohort_count"] = row_count
                             reasoning.append(("Counts", f"Found {row_count} patients (using row count, couldn't analyze data)"))
                     else:
                         # No data, use row_count
@@ -791,6 +804,8 @@ class CohortAgent:
                             "visits": 0,
                             "sites": 0
                         }
+                        # Update cohort_count (this is a fallback, so row_count might be correct here)
+                        state["cohort_count"] = row_count
                         reasoning.append(("Counts", f"Found {row_count} patients (no data returned)"))
             
             # Set waiting_for to indicate we're waiting for analysis decision
