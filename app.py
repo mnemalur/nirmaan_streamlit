@@ -934,59 +934,85 @@ def process_query_conversational(query: str):
                 # Check if we're waiting for analysis decision
                 elif waiting_for == "analysis_decision":
                     # Show counts prominently
-                    counts = result_state.get("counts", {})
-                    patients = counts.get("patients", 0)
-                    visits = counts.get("visits", 0)
-                    sites = counts.get("sites", 0)
-                    
-                    # Check if we have raw count data - always show it as dataframe for transparency
                     raw_count_data = result_state.get("raw_count_data")
                     
                     response_parts.append("🎉 **Great! I found matching patients for your criteria.**")
                     response_parts.append("")
+                    
+                    # Initialize counts from raw data - extract directly from dataframe
+                    patients = 0
+                    visits = 0
+                    sites = 0
                     
                     # Always show the dataframe if we have raw count data (transparent and reliable)
                     if raw_count_data:
                         row = raw_count_data.get("row", {})
                         
                         if isinstance(row, dict) and row:
-                            # Display the count row as a dataframe - transparent and reliable
+                            # Display the count row as a dataframe FIRST - transparent and reliable
                             st.markdown("### 📊 Cohort Summary")
                             count_df = pd.DataFrame([row])
                             st.dataframe(count_df, use_container_width=True, hide_index=True)
                             
-                            # Extract counts from the dataframe for metrics display
+                            # Extract ALL numeric values from the dataframe - use them directly
+                            # Find the largest numeric value as patient count (usually the first/main count)
+                            numeric_values = []
+                            for key, value in row.items():
+                                try:
+                                    if value is not None:
+                                        num_val = int(float(str(value)))
+                                        if num_val > 0:  # Only positive counts
+                                            numeric_values.append((key, num_val))
+                                except (ValueError, TypeError):
+                                    pass
+                            
+                            # Sort by value (largest first) - patient count is usually largest
+                            numeric_values.sort(key=lambda x: x[1], reverse=True)
+                            
+                            # Extract based on column name patterns
                             for key, value in row.items():
                                 key_lower = str(key).lower()
                                 try:
                                     if value is not None:
                                         num_val = int(float(str(value)))
+                                        # Match patient count
                                         if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
                                             patients = num_val
+                                        # Match visit count
                                         elif ('visit' in key_lower or 'encounter' in key_lower) and ('count' in key_lower or key_lower in ['visits', 'encounter_count']):
                                             visits = num_val
+                                        # Match site count
                                         elif ('site' in key_lower or 'provider' in key_lower) and ('count' in key_lower or key_lower in ['sites', 'provider_count']):
                                             sites = num_val
                                 except (ValueError, TypeError):
                                     pass
+                            
+                            # If we didn't find specific matches, use numeric values in order
+                            if patients == 0 and visits == 0 and sites == 0 and numeric_values:
+                                # Use first 3 numeric values as patients, visits, sites
+                                patients = numeric_values[0][1] if len(numeric_values) > 0 else 0
+                                visits = numeric_values[1][1] if len(numeric_values) > 1 else 0
+                                sites = numeric_values[2][1] if len(numeric_values) > 2 else 0
                     
-                    # Show metrics if we have any counts
-                    if patients > 0 or visits > 0 or sites > 0:
-                        # Show counts in a prominent way with metrics (displayed before text)
-                        st.markdown("### 📊 Cohort Summary")
+                    # Show metrics - always show if we have the dataframe
+                    if raw_count_data or patients > 0 or visits > 0 or sites > 0:
+                        # Show counts in a prominent way with metrics
+                        if not raw_count_data:  # Only show header if we didn't already show it above
+                            st.markdown("### 📊 Cohort Summary")
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("**Patients**", f"{patients:,}")
+                            st.metric("**Patients**", f"{patients:,}" if patients > 0 else "N/A")
                         with col2:
                             st.metric("**Visits**", f"{visits:,}" if visits > 0 else "N/A")
                         with col3:
                             st.metric("**Sites**", f"{sites:,}" if sites > 0 else "N/A")
                         
-                        response_parts.append(f"✅ Found **{patients:,} patients**")
-                        if visits > 0:
-                            response_parts.append(f"across **{visits:,} visits**")
-                        if sites > 0:
-                            response_parts.append(f"at **{sites} sites**")
+                        if patients > 0:
+                            response_parts.append(f"✅ Found **{patients:,} patients**")
+                            if visits > 0:
+                                response_parts.append(f"across **{visits:,} visits**")
+                            if sites > 0:
+                                response_parts.append(f"at **{sites} sites**")
                     else:
                         response_parts.append("✅ Generated SQL query. Ready to execute.")
                     
