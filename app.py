@@ -940,19 +940,31 @@ def process_query_conversational(query: str):
                     response_parts.append("")
                     
                     # Initialize counts from raw data - extract directly from dataframe
+                    # DO NOT use counts dict - it might have wrong values (like row_count = 1)
                     patients = 0
                     visits = 0
                     sites = 0
                     
+                    # Debug logging
+                    logger.info(f"🔍 DEBUG: raw_count_data exists: {raw_count_data is not None}")
+                    if raw_count_data:
+                        logger.info(f"🔍 DEBUG: raw_count_data row: {raw_count_data.get('row')}")
+                        logger.info(f"🔍 DEBUG: raw_count_data columns: {raw_count_data.get('columns')}")
+                    
                     # Always show the dataframe if we have raw count data (transparent and reliable)
+                    # Make it prominent like the codes display
                     if raw_count_data:
                         row = raw_count_data.get("row", {})
+                        columns = raw_count_data.get("columns", [])
                         
                         if isinstance(row, dict) and row:
                             # Display the count row as a dataframe FIRST - transparent and reliable
-                            st.markdown("### 📊 Cohort Summary")
+                            # Make it prominent and always visible (not in expander)
+                            st.markdown("### 📊 Cohort Summary - Count Results from Genie")
                             count_df = pd.DataFrame([row])
+                            # Show dataframe prominently - similar to how codes are shown
                             st.dataframe(count_df, use_container_width=True, hide_index=True)
+                            st.markdown("---")  # Separator
                             
                             # Extract ALL numeric values from the dataframe - use them directly
                             # Find the largest numeric value as patient count (usually the first/main count)
@@ -988,11 +1000,72 @@ def process_query_conversational(query: str):
                                     pass
                             
                             # If we didn't find specific matches, use numeric values in order
+                            # BUT: Skip if the only numeric value is 1 (likely row_count, not actual count)
                             if patients == 0 and visits == 0 and sites == 0 and numeric_values:
-                                # Use first 3 numeric values as patients, visits, sites
-                                patients = numeric_values[0][1] if len(numeric_values) > 0 else 0
-                                visits = numeric_values[1][1] if len(numeric_values) > 1 else 0
-                                sites = numeric_values[2][1] if len(numeric_values) > 2 else 0
+                                # Filter out value of 1 (likely row_count, not actual count)
+                                filtered_values = [nv for nv in numeric_values if nv[1] > 1]
+                                if filtered_values:
+                                    # Use first 3 filtered numeric values as patients, visits, sites
+                                    patients = filtered_values[0][1] if len(filtered_values) > 0 else 0
+                                    visits = filtered_values[1][1] if len(filtered_values) > 1 else 0
+                                    sites = filtered_values[2][1] if len(filtered_values) > 2 else 0
+                                    logger.info(f"🔍 DEBUG: Used filtered numeric values: patients={patients}, visits={visits}, sites={sites}")
+                                else:
+                                    # If all values are 1 or 0, something is wrong - log it
+                                    logger.warning(f"🔍 WARNING: All numeric values are 1 or 0: {numeric_values}. This might be row_count, not actual counts!")
+                            
+                            # Final debug logging
+                            logger.info(f"🔍 DEBUG: Final extracted counts: patients={patients}, visits={visits}, sites={sites}")
+                            logger.info(f"🔍 DEBUG: Row keys: {list(row.keys())}")
+                            logger.info(f"🔍 DEBUG: Row values: {row}")
+                    else:
+                        # Row is not a dict or is empty - show what we have anyway
+                        row = raw_count_data.get("row", {}) if raw_count_data else {}
+                        logger.warning(f"🔍 WARNING: raw_count_data row is not a dict or is empty. Row: {row}, Type: {type(row)}")
+                        if row:
+                            # Try to show it anyway
+                            st.markdown("### 📊 Cohort Summary - Count Results from Genie")
+                            try:
+                                count_df = pd.DataFrame([row] if not isinstance(row, list) else row)
+                                st.dataframe(count_df, use_container_width=True, hide_index=True)
+                            except Exception as e:
+                                st.warning(f"Could not display count data: {e}")
+                                st.json(row)  # Show as JSON as fallback
+                    
+                    # Also check if we have genie_data directly (fallback)
+                    if not raw_count_data:
+                        genie_data = result_state.get("genie_data", [])
+                        genie_columns = result_state.get("genie_columns", [])
+                        if genie_data and len(genie_data) == 1:
+                            # Show dataframe from genie_data directly
+                            st.markdown("### 📊 Cohort Summary - Count Results from Genie")
+                            row_data = genie_data[0]
+                            if isinstance(row_data, dict):
+                                count_df = pd.DataFrame([row_data])
+                            else:
+                                # Convert list/tuple to dict using columns
+                                if genie_columns:
+                                    count_df = pd.DataFrame([dict(zip(genie_columns, row_data))])
+                                else:
+                                    count_df = pd.DataFrame([row_data])
+                            st.dataframe(count_df, use_container_width=True, hide_index=True)
+                            st.markdown("---")
+                            
+                            # Extract from this dataframe too
+                            if isinstance(row_data, dict):
+                                for key, value in row_data.items():
+                                    key_lower = str(key).lower()
+                                    try:
+                                        if value is not None:
+                                            num_val = int(float(str(value)))
+                                            if 'patient' in key_lower and ('count' in key_lower or key_lower == 'patients'):
+                                                patients = num_val
+                                            elif ('visit' in key_lower or 'encounter' in key_lower) and ('count' in key_lower or key_lower in ['visits', 'encounter_count']):
+                                                visits = num_val
+                                            elif ('site' in key_lower or 'provider' in key_lower) and ('count' in key_lower or key_lower in ['sites', 'provider_count']):
+                                                sites = num_val
+                                    except (ValueError, TypeError):
+                                        pass
                     
                     # Show metrics - always show if we have the dataframe
                     if raw_count_data or patients > 0 or visits > 0 or sites > 0:
