@@ -83,6 +83,12 @@ if 'cohort_table_error' not in st.session_state:
     st.session_state.cohort_table_error = None
 if 'dimension_results' not in st.session_state:
     st.session_state.dimension_results = None
+if 'code_selection_action' not in st.session_state:
+    st.session_state.code_selection_action = None  # "use_all", "select_specific", "exclude_some", None
+if 'code_selection_ui_mode' not in st.session_state:
+    st.session_state.code_selection_ui_mode = None  # "select", "exclude", None
+if 'preview_selected_codes' not in st.session_state:
+    st.session_state.preview_selected_codes = []
 if 'dimension_analyzing' not in st.session_state:
     st.session_state.dimension_analyzing = False
 
@@ -765,6 +771,18 @@ def render_chat_page():
                         st.markdown("")  # Add spacing
                         display_dimension_results_compact(data["dimension_results"])
 
+    # Check for pending button actions first (before chat input)
+    # This handles button clicks from code selection UI (Option 4)
+    if st.session_state.get("code_selection_action") == "use_all":
+        # User clicked "Use All" button - process it
+        st.session_state.code_selection_action = None  # Reset
+        process_query_conversational("use all")
+        st.rerun()
+    elif st.session_state.get("code_selection_action") == "type_selection":
+        # User clicked "Type Selection" - just reset, let them type in chat input
+        st.session_state.code_selection_action = None  # Reset
+        # The chat input will handle the natural language processing
+    
     # Chat input
     if prompt := st.chat_input("Describe your clinical criteria or ask a question..."):
         # Process the query through the LangGraph agent
@@ -793,9 +811,18 @@ def process_query_conversational(query: str):
                     "diagnosis_phrases": st.session_state.get("diagnosis_phrases", [])
                 }
                 
-                # If user has selected codes in UI, pass them to agent
+                # If user has selected codes in UI (from preview or multi-select), pass them to agent
+                # Priority: preview_selected_codes > selected_codes from session state > legacy selection_key
+                preview_codes = st.session_state.get("preview_selected_codes", [])
+                if preview_codes:
+                    existing_state["selected_codes"] = preview_codes
+                    # Clear preview after using (will be cleared after processing)
+                elif st.session_state.get("selected_codes"):
+                    existing_state["selected_codes"] = st.session_state.get("selected_codes", [])
+                
+                # Legacy: Also check old selection_key format for backward compatibility
                 selection_key = f"code_selection_{st.session_state.session_id}"
-                if selection_key in st.session_state and st.session_state.get("codes"):
+                if selection_key in st.session_state and st.session_state.get("codes") and not existing_state.get("selected_codes"):
                     selected_code_values = st.session_state[selection_key]
                     selected_codes = [c for c in st.session_state.get("codes", []) if c.get('code') in selected_code_values]
                     if selected_codes:
@@ -929,25 +956,164 @@ def process_query_conversational(query: str):
                     # CRITICAL: Show codes prominently - user needs to see them to make selection decision
                     codes = result_state.get("codes", [])
                     if codes:
-                        response_parts.append(f"I found **{len(codes)} relevant clinical codes** from your criteria.")
+                        # Check if codes are from multiple conditions
+                        conditions = sorted(set([c.get("condition", "Unknown") for c in codes if c.get("condition")]))
+                        has_multiple_conditions = len(conditions) > 1
+                        
+                        if has_multiple_conditions:
+                            response_parts.append(f"I found **{len(codes)} relevant clinical codes** across **{len(conditions)} conditions**: {', '.join(conditions)}")
+                        else:
+                            response_parts.append(f"I found **{len(codes)} relevant clinical codes** from your criteria.")
                         response_parts.append("")
                         
                         # Show codes table prominently in a grid/dataframe - directly visible
                         code_df = pd.DataFrame(codes)
                         display_cols = ['code', 'description', 'vocabulary']
+                        # Add condition column if available and multiple conditions
+                        if has_multiple_conditions and 'condition' in code_df.columns:
+                            display_cols.insert(0, 'condition')
                         available_cols = [col for col in display_cols if col in code_df.columns]
                         
                         if available_cols:
                             # Show codes in expander (expanded by default) - user can see grid and collapse if needed
-                            with st.expander(f"📋 View All {len(codes)} Codes Found", expanded=True):
-                                st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
+                            if has_multiple_conditions:
+                                # Group by condition for better organization
+                                with st.expander(f"📋 View All {len(codes)} Codes Found (Grouped by Condition)", expanded=True):
+                                    for condition in conditions:
+                                        condition_codes = [c for c in codes if c.get("condition") == condition]
+                                        if condition_codes:
+                                            st.markdown(f"**{condition}** ({len(condition_codes)} codes):")
+                                            condition_df = pd.DataFrame(condition_codes)
+                                            condition_display_cols = [col for col in ['code', 'description', 'vocabulary'] if col in condition_df.columns]
+                                            st.dataframe(condition_df[condition_display_cols], use_container_width=True, hide_index=True)
+                                            st.markdown("")  # Add spacing between condition groups
+                            else:
+                                # Single condition - show flat list
+                                with st.expander(f"📋 View All {len(codes)} Codes Found", expanded=True):
+                                    st.dataframe(code_df[available_cols], use_container_width=True, hide_index=True)
                         
-                        # Add helpful text about what user can do
-                        response_parts.append("💬 **How would you like to proceed?**")
-                        response_parts.append("You can type your response below:")
-                        response_parts.append("- **'use all'** - to use all the codes I found")
-                        response_parts.append("- **'select codes'** - if you want to choose specific codes")
-                        response_parts.append("- **'I want codes X, Y, Z'** - to specify exact codes")
+                        # Handle button actions from previous interaction
+                        action = st.session_state.get("code_selection_action")
+                        ui_mode = st.session_state.get("code_selection_ui_mode")
+                        
+                        # If button was clicked, show appropriate UI
+                        if action == "select_some":
+                            # Show inline selection UI
+                            ui_mode = "select"
+                            st.session_state.code_selection_ui_mode = ui_mode
+                            st.session_state.code_selection_action = None  # Reset action, keep UI mode
+                        elif action == "type_selection":
+                            # Show natural language input prominently
+                            st.session_state.code_selection_action = None  # Reset action
+                            st.markdown("")
+                            st.markdown("**💬 Type your selection:**")
+                            # The chat input will handle this, but we can show a prompt
+                            st.info("💡 Type your response in the chat input below. Examples: 'use all', 'I want E11.9, I50.9', 'diabetes codes only'")
+                        
+                        # Show selection UI if in selection mode (Option 4: Inline checkboxes)
+                        if ui_mode == "select":
+                            st.markdown("")
+                            st.markdown("**Select codes to use:**")
+                            
+                            # Inline checkboxes for each code (Option 4 approach)
+                            selection_key_base = f"code_selection_{st.session_state.session_id}"
+                            
+                            # Group by condition if multiple conditions
+                            conditions = sorted(set([c.get("condition", "Unknown") for c in codes if c.get("condition")]))
+                            has_multiple_conditions = len(conditions) > 1
+                            
+                            if has_multiple_conditions:
+                                # Group codes by condition for better organization
+                                for condition in conditions:
+                                    condition_codes = [c for c in codes if c.get("condition") == condition]
+                                    if condition_codes:
+                                        st.markdown(f"**{condition}:**")
+                                        for code in condition_codes:
+                                            code_key = f"{selection_key_base}_{code.get('code', '')}"
+                                            code_label = f"{code.get('code', '')} - {code.get('description', '')[:60]}"
+                                            st.checkbox(code_label, key=code_key, value=st.session_state.get(code_key, False))
+                                        st.markdown("")  # Spacing between condition groups
+                            else:
+                                # Single condition - flat list
+                                for code in codes:
+                                    code_key = f"{selection_key_base}_{code.get('code', '')}"
+                                    code_label = f"{code.get('code', '')} - {code.get('description', '')[:60]}"
+                                    st.checkbox(code_label, key=code_key, value=st.session_state.get(code_key, False))
+                            
+                            # Collect selected codes from session state (after checkboxes are rendered)
+                            selected_codes_list = []
+                            for code in codes:
+                                code_key = f"{selection_key_base}_{code.get('code', '')}"
+                                if st.session_state.get(code_key, False):
+                                    selected_codes_list.append(code)
+                            
+                            # Show selected count and confirmation (Option 4: Direct confirmation, no preview step)
+                            if selected_codes_list:
+                                st.markdown("")
+                                st.markdown(f"**Selected: {len(selected_codes_list)} codes**")
+                                
+                                # Direct confirmation - no preview step
+                                confirm_col1, confirm_col2, confirm_col3 = st.columns([1, 1, 2])
+                                with confirm_col1:
+                                    if st.button(f"✅ Use {len(selected_codes_list)} Codes", key="confirm_selection", type="primary"):
+                                        # Store selected codes
+                                        st.session_state.selected_codes = selected_codes_list
+                                        st.session_state.preview_selected_codes = selected_codes_list
+                                        st.session_state.code_selection_ui_mode = None
+                                        # Clear all checkbox states
+                                        for code in codes:
+                                            code_key = f"{selection_key_base}_{code.get('code', '')}"
+                                            if code_key in st.session_state:
+                                                del st.session_state[code_key]
+                                        # Process query
+                                        process_query_conversational("use selected codes")
+                                        st.rerun()
+                                        return
+                                
+                                with confirm_col2:
+                                    if st.button("🟢 Use All Instead", key="use_all_instead"):
+                                        st.session_state.code_selection_ui_mode = None
+                                        # Clear checkbox states
+                                        for code in codes:
+                                            code_key = f"{selection_key_base}_{code.get('code', '')}"
+                                            if code_key in st.session_state:
+                                                del st.session_state[code_key]
+                                        process_query_conversational("use all")
+                                        st.rerun()
+                                        return
+                            else:
+                                st.info("👆 Check the boxes above to select codes, or click 'Use All' to use all codes")
+                        
+                        else:
+                            # Option 4: Progressive Disclosure - Three equal options
+                            st.markdown("")
+                            st.markdown("💬 **What would you like to do?**")
+                            
+                            # Three equal options side by side
+                            option_col1, option_col2, option_col3 = st.columns(3)
+                            
+                            with option_col1:
+                                if st.button("🟢 Use All", key="btn_use_all", type="primary", use_container_width=True):
+                                    st.session_state.code_selection_action = "use_all"
+                                    st.rerun()
+                            
+                            with option_col2:
+                                if st.button("🔵 Select Some", key="btn_select_some", use_container_width=True):
+                                    st.session_state.code_selection_action = "select_some"
+                                    st.rerun()
+                            
+                            with option_col3:
+                                if st.button("💬 Type Selection", key="btn_type_selection", use_container_width=True):
+                                    st.session_state.code_selection_action = "type_selection"
+                                    st.rerun()
+                            
+                            # Natural language examples - prominent and helpful
+                            st.markdown("")
+                            st.markdown("**💡 Examples you can type:**")
+                            st.markdown("- `use all` - Use all codes")
+                            st.markdown("- `I want E11.9, I50.9` - Use specific codes")
+                            st.markdown("- `diabetes codes only` - Filter by condition")
+                            st.markdown("- `exclude complications` - Exclude codes with specific terms")
                     else:
                         # No codes found
                         response_parts.append("I searched for codes but didn't find any matching results.")
@@ -1384,6 +1550,10 @@ def process_query_conversational(query: str):
                     "content": response_text,
                     "data": message_data
                 })
+                
+                # Clear preview_selected_codes after using (to avoid reusing in next turn)
+                if st.session_state.get("preview_selected_codes"):
+                    st.session_state.preview_selected_codes = []
                 
             except Exception as e:
                 error_msg = f"I encountered an error while processing your request: {str(e)}"

@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 import logging
+import re
 from config import config
 
 logger = logging.getLogger(__name__)
@@ -196,8 +197,91 @@ class CohortAgent:
                 # Extract excluded conditions/codes
                 return state
             
-            # If user mentions specific codes (e.g., "I want E11.9, I50.9"), treat as selection
-            # This is a simple heuristic - could be enhanced with regex
+            # Enhanced NL parsing for code selection (Option 4)
+            # Check if user mentions specific codes (e.g., "I want E11.9, I50.9")
+            # Pattern to match codes like E11.9, I50.9, etc.
+            code_pattern = r'\b[A-Z]\d{2}\.?\d*\b'
+            found_codes = re.findall(code_pattern, query.upper())
+            
+            if found_codes:
+                # User mentioned specific codes - extract and match them
+                all_codes = state.get("codes", [])
+                code_dict = {c.get("code", "").upper(): c for c in all_codes}
+                matched_codes = []
+                for code_str in found_codes:
+                    # Try exact match first
+                    if code_str in code_dict:
+                        matched_codes.append(code_dict[code_str])
+                    else:
+                        # Try with/without dots - handle code format variations
+                        # E.g., "E119" vs "E11.9" vs "E11.9"
+                        code_variants = [
+                            code_str,  # Original
+                            code_str.replace(".", ""),  # Remove dot: E11.9 -> E119
+                        ]
+                        # Try adding dot if it's missing (e.g., E119 -> E11.9)
+                        if "." not in code_str and len(code_str) >= 3:
+                            # Insert dot before last digit(s): E119 -> E11.9
+                            if len(code_str) == 4:
+                                code_variants.append(code_str[:3] + "." + code_str[3:])
+                            elif len(code_str) == 5:
+                                code_variants.append(code_str[:3] + "." + code_str[3:])
+                        
+                        for variant in code_variants:
+                            if variant in code_dict:
+                                matched_codes.append(code_dict[variant])
+                                break
+                
+                if matched_codes:
+                    state["selected_codes"] = matched_codes
+                    state["code_selection_mode"] = "selected"
+                    state["current_step"] = "code_selection"
+                    state["waiting_for"] = None
+                    return state
+            
+            # Check for condition-based filtering (e.g., "diabetes codes only")
+            all_codes = state.get("codes", [])
+            if all_codes:
+                query_lower = query.lower()
+                # Check for "only" or "just" + condition name
+                if "only" in query_lower or "just" in query_lower:
+                    # Extract condition name from query
+                    for code in all_codes:
+                        condition = code.get("condition", "").lower()
+                        if condition and condition in query_lower:
+                            # Filter codes by condition
+                            filtered_codes = [c for c in all_codes if c.get("condition", "").lower() == condition]
+                            if filtered_codes:
+                                state["selected_codes"] = filtered_codes
+                                state["code_selection_mode"] = "selected"
+                                state["current_step"] = "code_selection"
+                                state["waiting_for"] = None
+                                return state
+                
+                # Check for exclusion patterns (e.g., "exclude complications")
+                exclude_keywords = ["exclude", "without", "not", "except", "skip"]
+                if any(kw in query_lower for kw in exclude_keywords):
+                    # Extract exclusion term
+                    for keyword in exclude_keywords:
+                        if keyword in query_lower:
+                            # Find the term after the keyword
+                            parts = query_lower.split(keyword, 1)
+                            if len(parts) > 1:
+                                exclusion_term = parts[1].strip().split()[0]  # First word after keyword
+                                # Filter out codes containing the exclusion term
+                                filtered_codes = [
+                                    c for c in all_codes 
+                                    if exclusion_term not in c.get("description", "").lower() 
+                                    and exclusion_term not in c.get("code", "").lower()
+                                ]
+                                if filtered_codes:
+                                    state["selected_codes"] = filtered_codes
+                                    state["code_selection_mode"] = "selected"
+                                    state["current_step"] = "code_selection"
+                                    state["waiting_for"] = None
+                                    return state
+            
+            # Fallback: Simple heuristic for code-like patterns
             if any(char.isdigit() or char == '.' for char in query) and len(query) < 100:
                 # Might be listing codes - treat as wanting to select
                 state["code_selection_mode"] = "selected"
